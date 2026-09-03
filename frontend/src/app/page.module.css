@@ -1,0 +1,86 @@
+.page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 32px;
+}
+
+.main {
+  width: min(100%, 680px);
+  padding: 48px;
+  border: 1px solid #dfe3e8;
+  border-radius: 20px;
+  background: #ffffff;
+  box-shadow: 0 20px 60px rgb(15 23 42 / 8%);
+}
+
+.eyebrow {
+  margin-bottom: 12px;
+  color: #52606d;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.main h1 {
+  color: #102a43;
+  font-size: clamp(2.25rem, 7vw, 4rem);
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.description {
+  max-width: 520px;
+  margin-top: 20px;
+  color: #52606d;
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 32px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: #f0f4f8;
+  color: #334e68;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.statusDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #9fb3c8;
+}
+
+.status[data-state="connected"] {
+  background: #e3f9e5;
+  color: #176c39;
+}
+
+.status[data-state="connected"] .statusDot {
+  background: #31a25f;
+}
+
+.status[data-state="unavailable"] {
+  background: #ffeeee;
+  color: #a61b1b;
+}
+
+.status[data-state="unavailable"] .statusDot {
+  background: #d64545;
+}
+
+@media (max-width: 600px) {
+  .page {
+    padding: 20px;
+  }
+
+  .main {
+    padding: 32px 24px;
+  }
+}
