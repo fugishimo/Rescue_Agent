@@ -352,7 +352,7 @@ export function RescueDashboard() {
             <span>{snapshot?.processed_planned_events ?? 0}/{snapshot?.total_planned_events ?? 0}</span>
           </div>
           <ol className={styles.feed} aria-live="polite">
-            {(snapshot?.events ?? []).slice(-12).map((event) => {
+            {(snapshot?.events ?? []).slice(-12).reverse().map((event) => {
               const booking = bookings.find((item) => item.id === event.booking_id);
               return (
                 <li key={event.id} data-event={event.event_type}>
