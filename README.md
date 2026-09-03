@@ -1,8 +1,15 @@
 # Rescue Snag Bookings
 
-Rescue Snag Bookings is an AI-native marketplace operations dashboard. The
-project contains a Next.js frontend and a FastAPI backend with a basic health
-connection between them.
+Rescue Snag Bookings is an AI-native marketplace operations demo for detecting
+and recovering at-risk bookings. A randomized 90-second run streams renter and
+lister activity, calculates transparent rescue scores, applies deterministic
+guardrails, generates intervention-specific SMS copy, and simulates replies and
+booking outcomes. Successful interventions update rescued GMV and every action
+remains inspectable in an audit ledger.
+
+This repository uses simulated marketplace profiles and demo SMS state only. It
+does not contain or claim access to real Snag data, and it never sends a real
+text message.
 
 ## Prerequisites
 
@@ -19,18 +26,17 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-cp .env.example .env
-uvicorn app.main:app --reload --port 8000 --env-file .env
+uvicorn app.main:app --reload --port 8000
 ```
 
 The API is available at `http://localhost:8000`. Verify it directly at
 `http://localhost:8000/health`.
 
-To enable model-generated rescue wording, set `OPENAI_API_KEY` in
-`backend/.env`. The default model is `gpt-4o-mini` and can be changed with
-`OPENAI_MODEL`. If credentials are absent, the provider is unavailable, or a
-message fails validation, the app automatically uses an intervention-specific
-fallback template so the simulation continues.
+The demo works without credentials by using intervention-specific fallback
+messages. To enable model-generated rescue wording, create a private
+`backend/.env`, add `OPENAI_API_KEY`, and start Uvicorn with `--env-file .env`.
+The default model is `gpt-4o-mini` and can be changed with `OPENAI_MODEL`. The
+environment file is ignored by Git.
 
 ## Inspect backend APIs
 
@@ -62,7 +68,6 @@ In a second terminal, from the repository root:
 ```bash
 cd frontend
 npm install
-cp .env.example .env.local
 npm run dev
 ```
 
@@ -76,6 +81,37 @@ Open `http://localhost:3000/activity` to inspect every intervention in the
 current run. Each record retains its trigger, score evidence, explanation,
 message, simulated response, resulting booking state, and any rescued GMV. The
 dashboard and activity page use the same duplicate-safe monthly analytics.
+
+## Demo walkthrough
+
+1. Open `http://localhost:3000/dashboard`.
+2. Leave Autopilot on and select **Start live simulation**.
+3. Watch three booking journeys evolve for approximately 90 seconds.
+4. Inspect a booking row as its score and risk reasons change.
+5. Follow the simulated rescue SMS, recipient reply, and mixed outcomes.
+6. Confirm that a completed rescue increments monthly GMV.
+7. Open **Activity log** and select an intervention to inspect its evidence.
+
+Use **Reset** at any point to cancel the current run and restore a clean demo.
+After completion, **Run simulation again** starts a newly randomized run.
+
+## Architecture
+
+```text
+Next.js dashboard + activity ledger
+                 │ polls JSON
+                 ▼
+FastAPI simulation engine
+  ├─ seeded renter/lister profiles
+  ├─ deterministic rescue scoring and guardrails
+  ├─ constrained OpenAI message generation with safe fallback
+  ├─ simulated SMS delivery and profile-driven response outcomes
+  └─ shared audit and duplicate-safe GMV analytics
+```
+
+FastAPI owns all scoring, intervention, outcome, and analytics logic. The
+Next.js client is an operator view over that canonical state, so the dashboard
+and activity ledger cannot calculate conflicting results.
 
 ## Run checks
 

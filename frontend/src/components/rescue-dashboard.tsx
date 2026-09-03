@@ -50,10 +50,14 @@ function eventLabel(event: MarketplaceEvent) {
     sms_generated: "SMS wording generated",
     sms_sent: "Demo SMS sent",
     sms_received: "Simulated reply received",
-    booking_rescued: "Booking rescued",
+    booking_rescued: "Recipient re-engaged",
     rescue_failed: "Rescue unsuccessful",
     booking_completed: "Booking completed",
   };
+  if (event.event_type === "booking_completed" && event.metadata.rescued_booking) {
+    const value = Number(event.metadata.booking_value ?? 0);
+    return value > 0 ? `Booking rescued · +${money.format(value)} GMV` : "Booking rescued";
+  }
   return labels[event.event_type] ?? words(event.event_type);
 }
 
@@ -261,6 +265,10 @@ export function RescueDashboard() {
 
   const status = snapshot?.status ?? "idle";
   const isRunning = status === "running";
+  const secondsRemaining = Math.max(
+    0,
+    Math.ceil((snapshot?.duration_seconds ?? 90) - (snapshot?.elapsed_seconds ?? 0)),
+  );
   const highRiskCount = bookings.filter((booking) => booking.rescue_score >= 50).length;
 
   async function runMutation(operation: () => Promise<SimulationSnapshot>) {
@@ -297,7 +305,7 @@ export function RescueDashboard() {
           <Link className={styles.navLink} href="/activity">Activity log</Link>
           <div className={styles.liveState} data-live={isRunning}>
             <span aria-hidden="true" />
-            {isRunning ? "LIVE" : status === "completed" ? "RUN COMPLETE" : "STANDBY"}
+            {isRunning ? `LIVE · ${secondsRemaining}s` : status === "completed" ? "RUN COMPLETE" : "STANDBY"}
           </div>
           <label className={styles.toggleLabel}>
             <span>
@@ -325,7 +333,7 @@ export function RescueDashboard() {
             disabled={isRunning || mutating || loading}
             onClick={() => void handleStart()}
           >
-            {isRunning ? "Simulation running" : status === "completed" ? "Run again" : "Start simulation"}
+            {isRunning ? "Simulation running" : status === "completed" ? "Run simulation again" : "Start live simulation"}
           </button>
           <button
             className={styles.secondaryButton}
@@ -348,6 +356,19 @@ export function RescueDashboard() {
         <div className={styles.errorBanner} role="alert">
           <span>{error}</span>
           <button type="button" onClick={() => void load()}>Retry</button>
+        </div>
+      )}
+
+      {!error && status === "idle" && (
+        <div className={styles.runNotice}>
+          <strong>90-second live demo</strong>
+          <span>Three marketplace journeys · automatic rescue decisions · simulated SMS only</span>
+        </div>
+      )}
+      {!error && status === "completed" && (
+        <div className={styles.runNotice} data-complete="true">
+          <strong>Simulation complete</strong>
+          <span>Review the outcomes below or open the Activity log for the full decision trail.</span>
         </div>
       )}
 
@@ -400,6 +421,11 @@ export function RescueDashboard() {
                 </tr>
               </thead>
               <tbody>
+                {loading && (
+                  <tr className={styles.loadingRow}>
+                    <td colSpan={6}>Loading marketplace operations…</td>
+                  </tr>
+                )}
                 {bookings.map((booking) => {
                   const listing = listings.get(booking.listing_id);
                   const action = actions.get(booking.id);
@@ -454,7 +480,7 @@ export function RescueDashboard() {
           <aside className={styles.feedPanel}>
             <div className={styles.panelHeading}>
               <div><p>EVENT STREAM</p><h2>Live operations</h2></div>
-              <span>{snapshot?.processed_planned_events ?? 0}/{snapshot?.total_planned_events ?? 0}</span>
+              <span>Newest first</span>
             </div>
             <ol className={styles.feed} aria-live="polite">
               {(snapshot?.events ?? []).slice(-12).reverse().map((event) => {

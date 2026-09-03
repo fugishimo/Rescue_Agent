@@ -203,6 +203,40 @@ def test_generated_booking_values_and_dates_follow_profile_ranges() -> None:
     engine.reset()
 
 
+@pytest.mark.parametrize("seed", range(10))
+def test_randomized_runs_preserve_the_demo_story_constraints(seed: int) -> None:
+    engine = SimulationEngine(duration_seconds=0.08, speed_multiplier=30)
+    engine.start(seed=seed)
+    completed = wait_for_completion(engine)
+    actions = completed.rescue_actions
+    healthy_booking_id = next(
+        journey.booking_id
+        for journey in completed.selected_journeys
+        if journey.scenario is ScenarioType.HEALTHY_COMPLETION
+    )
+    score_changes_by_booking = {
+        booking.id: sum(
+            event.booking_id == booking.id
+            and event.event_type is EventType.RESCUE_SCORE_CHANGED
+            for event in completed.events
+        )
+        for booking in completed.bookings
+    }
+
+    assert len(completed.selected_journeys) == 3
+    assert actions
+    assert all(action.status is RescueActionStatus.SENT for action in actions)
+    assert any(action.outcome is RescueOutcome.RESCUED for action in actions)
+    assert any(
+        booking.status in {BookingStatus.AT_RISK, BookingStatus.LOST}
+        for booking in completed.bookings
+    )
+    assert all(action.booking_id != healthy_booking_id for action in actions)
+    assert max(score_changes_by_booking.values()) >= 2
+    assert completed.analytics.run_bookings_rescued == 1
+    assert completed.analytics.run_gmv_rescued > 0
+
+
 def test_duplicate_start_is_rejected_and_reset_allows_clean_second_run() -> None:
     engine = SimulationEngine(duration_seconds=0.1)
 

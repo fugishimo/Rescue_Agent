@@ -294,6 +294,12 @@ class SimulationEngine:
             return
 
         with self._lock:
+            delivery_threads = tuple(self._delivery_threads)
+        for delivery_thread in delivery_threads:
+            if delivery_thread.is_alive():
+                delivery_thread.join(timeout=self._scaled_delay(5))
+
+        with self._lock:
             if self._run_id == run_id and self._status is SimulationStatus.RUNNING:
                 self._status = SimulationStatus.COMPLETED
                 self._completed_at = datetime.now(timezone.utc)
@@ -419,6 +425,10 @@ class SimulationEngine:
             existing_actions=self._rescue_actions,
         )
         if decision.should_create_action:
+            triggered_at = datetime.now(timezone.utc)
+            if booking.at_risk_at is None:
+                booking = booking.model_copy(update={"at_risk_at": triggered_at})
+                self._bookings[booking_id] = booking
             action = RescueAction(
                 id=f"action_{uuid4().hex[:12]}",
                 booking_id=booking_id,
@@ -435,7 +445,7 @@ class SimulationEngine:
                     id=f"event_{uuid4().hex[:12]}",
                     booking_id=booking_id,
                     event_type=EventType.RESCUE_TRIGGERED,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=triggered_at,
                     metadata={
                         "action_id": action.id,
                         "score": score.score,
@@ -741,6 +751,7 @@ class SimulationEngine:
                         "action_id": action.id,
                         "outcome": RescueOutcome.RESCUED.value,
                         "rescued_booking": True,
+                        "booking_value": booking.booking_value,
                     },
                 )
             )
@@ -1035,7 +1046,9 @@ class SimulationEngine:
             interleaved.extend((journey, journey.steps[step_index]) for journey in active)
 
         weights = [rng.uniform(4, 7) for _ in interleaved]
-        target_end = self.duration_seconds * 0.9
+        # Finish the story with enough time for the reviewer to read the final
+        # outcomes before the 90-second run ends.
+        target_end = self.duration_seconds * 0.82
         scale = target_end / sum(weights)
         elapsed = 0.0
         planned: list[_PlannedEvent] = []

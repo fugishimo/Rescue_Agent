@@ -63,7 +63,7 @@ async def listings() -> tuple[Listing, ...]:
 
 @app.get("/bookings", response_model=tuple[Booking, ...], tags=["marketplace"])
 async def bookings() -> tuple[Booking, ...]:
-    """Return the Phase 2 seeded booking journeys."""
+    """Return the seeded booking journeys."""
     return BOOKINGS
 
 
@@ -91,7 +91,7 @@ async def simulation_state() -> SimulationSnapshot:
 
 @app.get("/dashboard", response_model=SimulationSnapshot, tags=["simulation"])
 async def dashboard_state() -> SimulationSnapshot:
-    """Return simulation state in the shape consumed by the future dashboard."""
+    """Return the live state consumed by the operations dashboard."""
     return SIMULATION_ENGINE.snapshot()
 
 

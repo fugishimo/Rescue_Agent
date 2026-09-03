@@ -100,6 +100,16 @@ def calculate_analytics(
     )
     monthly_rescues = BASELINE_MONTHLY_RESCUES + len(rescued_ids)
     monthly_resolved = BASELINE_MONTHLY_RESOLVED_ACTIONS + resolved_actions
+    active_booking_ids = {
+        booking.id
+        for booking in bookings
+        if booking.status in {BookingStatus.AT_RISK, BookingStatus.RESCUED}
+    }
+    active_booking_ids.update(
+        action.booking_id
+        for action in actions
+        if action.outcome is RescueOutcome.PENDING
+    )
 
     return RescueAnalytics(
         baseline_gmv_rescued=BASELINE_MONTHLY_GMV,
@@ -109,10 +119,7 @@ def calculate_analytics(
         monthly_gmv_rescued=BASELINE_MONTHLY_GMV + run_gmv,
         monthly_bookings_rescued=monthly_rescues,
         rescue_success_rate=round((monthly_rescues / monthly_resolved) * 100, 1),
-        active_rescue_cases=sum(
-            booking.status in {BookingStatus.AT_RISK, BookingStatus.RESCUED}
-            for booking in bookings
-        ),
+        active_rescue_cases=len(active_booking_ids),
         total_demo_sms_sent=sum(action.sent_at is not None for action in actions),
     )
 

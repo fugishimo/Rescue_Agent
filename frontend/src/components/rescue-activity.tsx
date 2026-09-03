@@ -30,6 +30,7 @@ export function RescueActivity() {
   const [data, setData] = useState<ActivityResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -37,6 +38,8 @@ export function RescueActivity() {
       setError(null);
     } catch {
       setError("The rescue audit API is unavailable.");
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -113,7 +116,13 @@ export function RescueActivity() {
             </tbody>
           </table>
         </div>
-        {!data?.records.length && (
+        {loading && (
+          <div className={styles.empty}>
+            <strong>Loading rescue activity…</strong>
+            <p>Reconstructing the current intervention trail.</p>
+          </div>
+        )}
+        {!loading && !data?.records.length && (
           <div className={styles.empty}>
             <strong>No interventions logged yet</strong>
             <p>Start the live simulation to create an inspectable Rescue Agent record.</p>
