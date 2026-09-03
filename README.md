@@ -1,8 +1,8 @@
 # Rescue Snag Bookings
 
-Rescue Snag Bookings is an AI-native marketplace operations dashboard. This
-Phase 1 scaffold contains a Next.js frontend and a FastAPI backend with a basic
-health connection between them.
+Rescue Snag Bookings is an AI-native marketplace operations dashboard. The
+project contains a Next.js frontend and a FastAPI backend with a basic health
+connection between them.
 
 ## Prerequisites
 
@@ -25,6 +25,18 @@ uvicorn app.main:app --reload --port 8000
 
 The API is available at `http://localhost:8000`. Verify it directly at
 `http://localhost:8000/health`.
+
+## Inspect seeded marketplace data
+
+With the backend running, the Phase 2 data is available from:
+
+- `GET /profiles` — six renters and five listers
+- `GET /listings` — seeded inventory tied to listers
+- `GET /bookings` — valid seeded booking journeys
+- `GET /events` — booking event history
+- `GET /marketplace/seed` — the complete seed payload
+
+Interactive API documentation is available at `http://localhost:8000/docs`.
 
 ## Start the frontend
 
