@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Rescue Agent",
-  description: "Rescue bookings in real time.",
+  title: "Rescue Agent | Live Operations",
+  description: "Monitor and rescue at-risk marketplace bookings in real time.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

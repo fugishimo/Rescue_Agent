@@ -57,8 +57,10 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`. The page reports **Backend connected** when the
-FastAPI health endpoint is available.
+Open `http://localhost:3000/dashboard` to use the live Rescue Agent operations
+console. Start a simulation to watch booking events, scores, rescue targets, and
+autopilot decisions update without refreshing the page. Select any booking row
+to inspect its score breakdown and agent explanation.
 
 ## Run checks
 
