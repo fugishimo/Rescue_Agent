@@ -23,6 +23,11 @@ class RescueActionStatus(StrEnum):
     FAILED = "failed"
 
 
+class MessageSource(StrEnum):
+    OPENAI = "openai"
+    FALLBACK_TEMPLATE = "fallback_template"
+
+
 class RescueOutcome(StrEnum):
     PENDING = "pending"
     RESCUED = "rescued"
@@ -40,7 +45,7 @@ class RescueAction(DomainModel):
     target_id: str
     reason_summary: str
     message_text: str | None = None
-    message_source: str | None = None
+    message_source: MessageSource | None = None
     status: RescueActionStatus = RescueActionStatus.PENDING
     sent_at: datetime | None = None
     response_text: str | None = None

@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.data.profiles import RENTERS
 from app.main import app
-from app.models import BookingStatus, EventType, RescueActionStatus
+from app.models import BookingStatus, EventType, MessageSource, RescueActionStatus
 from app.services.simulation import (
     SIMULATION_ENGINE,
     ScenarioType,
@@ -57,7 +57,12 @@ def test_accelerated_run_generates_events_and_valid_mixed_outcomes() -> None:
     assert len(completed.scores) == 3
     assert completed.rescue_actions
     assert all(
-        action.status is RescueActionStatus.PENDING
+        action.status is RescueActionStatus.GENERATED
+        for action in completed.rescue_actions
+    )
+    assert all(action.message_text for action in completed.rescue_actions)
+    assert all(
+        action.message_source is MessageSource.FALLBACK_TEMPLATE
         for action in completed.rescue_actions
     )
     assert len(
@@ -72,6 +77,14 @@ def test_accelerated_run_generates_events_and_valid_mixed_outcomes() -> None:
     )
     assert any(
         event.event_type is EventType.RESCUE_TRIGGERED for event in completed.events
+    )
+    assert any(event.event_type is EventType.SMS_GENERATED for event in completed.events)
+    generation_events = [
+        event for event in completed.events if event.event_type is EventType.SMS_GENERATED
+    ]
+    assert all(
+        event.metadata["message_source"] == MessageSource.FALLBACK_TEMPLATE.value
+        for event in generation_events
     )
     assert all(
         score.raw_score == sum(reason.points for reason in score.reasons)

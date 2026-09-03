@@ -46,6 +46,7 @@ function eventLabel(event: MarketplaceEvent) {
     rescue_score_changed: "Rescue score changed",
     rescue_triggered: "Rescue action triggered",
     autopilot_action_held: "Action held by operator",
+    sms_generated: "SMS wording generated",
     booking_completed: "Booking completed",
   };
   return labels[event.event_type] ?? words(event.event_type);

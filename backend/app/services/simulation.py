@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.services.rescue_rules import GuardrailCode, evaluate_rescue_rules
 from app.services.rescue_scoring import RescueScore, calculate_rescue_score
+from app.services.messaging import MessagingService, build_rescue_message_context
 
 
 class SimulationStatus(StrEnum):
@@ -142,7 +143,12 @@ _ALLOWED_TRANSITIONS: dict[BookingStatus, set[BookingStatus]] = {
 class SimulationEngine:
     """Thread-safe, in-memory engine for a single live simulation run."""
 
-    def __init__(self, duration_seconds: float = 90, speed_multiplier: int = 30):
+    def __init__(
+        self,
+        duration_seconds: float = 90,
+        speed_multiplier: int = 30,
+        messaging_service: MessagingService | None = None,
+    ):
         if duration_seconds <= 0:
             raise ValueError("duration_seconds must be positive")
         if speed_multiplier <= 0:
@@ -150,6 +156,7 @@ class SimulationEngine:
 
         self.duration_seconds = duration_seconds
         self.speed_multiplier = speed_multiplier
+        self.messaging_service = messaging_service or MessagingService()
         self._lock = threading.RLock()
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
@@ -398,6 +405,50 @@ class SimulationEngine:
                         "intervention": score.recommended_intervention.value,
                         "explanation": score.explanation,
                         "status": RescueActionStatus.PENDING.value,
+                    },
+                )
+            )
+            renter = next(renter for renter in RENTERS if renter.id == booking.renter_id)
+            lister = next(lister for lister in LISTERS if lister.id == booking.lister_id)
+            listing = next(
+                listing for listing in LISTINGS if listing.id == booking.listing_id
+            )
+            context = build_rescue_message_context(
+                booking=booking,
+                score=score,
+                renter=renter,
+                lister=lister,
+                listing=listing,
+                events=[
+                    event for event in self._events if event.booking_id == booking_id
+                ],
+            )
+            generation = self.messaging_service.generate(context)
+            generated_action = action.model_copy(
+                update={
+                    "message_text": generation.message_text,
+                    "message_source": generation.message_source,
+                    "status": RescueActionStatus.GENERATED,
+                }
+            )
+            self._rescue_actions[-1] = generated_action
+            self._events.append(
+                Event(
+                    id=f"event_{uuid4().hex[:12]}",
+                    booking_id=booking_id,
+                    event_type=EventType.SMS_GENERATED,
+                    timestamp=datetime.now(timezone.utc),
+                    metadata={
+                        "action_id": generated_action.id,
+                        "intervention": generated_action.intervention_type.value,
+                        "target": generated_action.target_type.value,
+                        "message_source": generation.message_source.value,
+                        "generation_failure": (
+                            generation.failure_code.value
+                            if generation.failure_code
+                            else None
+                        ),
+                        "status": RescueActionStatus.GENERATED.value,
                     },
                 )
             )
@@ -713,4 +764,6 @@ class SimulationEngine:
         return tuple(planned)
 
 
-SIMULATION_ENGINE = SimulationEngine()
+SIMULATION_ENGINE = SimulationEngine(
+    messaging_service=MessagingService.from_environment()
+)

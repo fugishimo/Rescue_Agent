@@ -73,8 +73,13 @@ export interface RescueAction {
   target_type: Exclude<RescueTarget, null>;
   target_id: string;
   reason_summary: string;
+  message_text: string | null;
+  message_source: "openai" | "fallback_template" | null;
   status: string;
   score_at_trigger: number;
+  sent_at: string | null;
+  response_text: string | null;
+  response_at: string | null;
   outcome: string;
 }
 

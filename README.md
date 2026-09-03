@@ -20,11 +20,17 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 cp .env.example .env
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000 --env-file .env
 ```
 
 The API is available at `http://localhost:8000`. Verify it directly at
 `http://localhost:8000/health`.
+
+To enable model-generated rescue wording, set `OPENAI_API_KEY` in
+`backend/.env`. The default model is `gpt-4o-mini` and can be changed with
+`OPENAI_MODEL`. If credentials are absent, the provider is unavailable, or a
+message fails validation, the app automatically uses an intervention-specific
+fallback template so the simulation continues.
 
 ## Inspect backend APIs
 
@@ -41,8 +47,9 @@ With the backend running, seeded data and live engine state are available from:
 - `GET /dashboard` — polling-friendly simulation snapshot
 - `POST /autopilot` — enable or disable automatic rescue actions
 
-Phase 4 rescue actions remain `pending`; message generation and SMS delivery are
-implemented in later gated phases.
+Qualifying rescue actions contain validated SMS wording and record whether it
+came from OpenAI or a fallback template. Actions remain `generated`; simulated
+delivery and recipient responses are implemented in Phase 7.
 
 Interactive API documentation is available at `http://localhost:8000/docs`.
 

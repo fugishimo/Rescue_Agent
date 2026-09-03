@@ -5,6 +5,7 @@ from app.models.listing import AvailabilityStatus, Listing, Market
 from app.models.renter import Renter
 from app.models.rescue_action import (
     InterventionType,
+    MessageSource,
     RescueAction,
     RescueActionStatus,
     RescueOutcome,
@@ -20,6 +21,7 @@ __all__ = [
     "Lister",
     "Listing",
     "Market",
+    "MessageSource",
     "Renter",
     "RescueAction",
     "RescueActionStatus",
