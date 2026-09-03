@@ -48,8 +48,9 @@ With the backend running, seeded data and live engine state are available from:
 - `POST /autopilot` — enable or disable automatic rescue actions
 
 Qualifying rescue actions contain validated SMS wording and record whether it
-came from OpenAI or a fallback template. Actions remain `generated`; simulated
-delivery and recipient responses are implemented in Phase 7.
+came from OpenAI or a fallback template. The demo then records a simulated send,
+uses the selected profile to produce a reply or no-response outcome, and updates
+the booking. No real SMS provider is connected and no message leaves the app.
 
 Interactive API documentation is available at `http://localhost:8000/docs`.
 
@@ -66,8 +67,9 @@ npm run dev
 
 Open `http://localhost:3000/dashboard` to use the live Rescue Agent operations
 console. Start a simulation to watch booking events, scores, rescue targets, and
-autopilot decisions update without refreshing the page. Select any booking row
-to inspect its score breakdown and agent explanation.
+autopilot decisions update without refreshing the page. The simulated SMS inbox
+shows the latest outreach, recipient, reply, and outcome. Select any booking row
+to inspect its score breakdown, agent explanation, and full demo message thread.
 
 ## Run checks
 

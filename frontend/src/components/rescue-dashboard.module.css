@@ -252,10 +252,84 @@
 }
 
 .bookingsPanel,
-.feedPanel {
+.feedPanel,
+.smsPanel {
   min-width: 0;
   border: 1px solid var(--border);
   background: var(--surface);
+}
+
+.rightRail {
+  position: sticky;
+  top: 18px;
+  display: grid;
+  gap: 18px;
+}
+
+.smsHeader {
+  display: grid;
+  gap: 10px;
+  padding: 17px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.smsHeader > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.smsHeader p,
+.detailSms > div p {
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+}
+
+.smsHeader h2 { font-size: 20px; letter-spacing: -0.025em; }
+.smsHeader > span,
+.detailSms > div span {
+  width: fit-content;
+  padding: 4px 7px;
+  color: var(--amber);
+  border: 1px solid rgb(255 190 92 / 35%);
+  background: rgb(255 190 92 / 6%);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.phoneFrame { margin: 14px; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 18px; background: #07111a; }
+.phoneTop { display: flex; align-items: center; gap: 10px; padding: 13px 14px; border-bottom: 1px solid var(--border); background: #0d1a25; }
+.phoneTop > span { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgb(101 223 153 / 10%); }
+.phoneTop div { min-width: 0; display: grid; gap: 3px; }
+.phoneTop strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.phoneTop small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.messageThread { display: grid; gap: 12px; min-height: 170px; padding: 16px 13px; align-content: start; }
+.outgoingMessage,
+.incomingMessage { width: fit-content; max-width: 88%; padding: 10px 11px 8px; border-radius: 13px; animation: messageIn 220ms ease-out; }
+.outgoingMessage { justify-self: end; color: #031310; border-bottom-right-radius: 3px; background: var(--cyan); }
+.incomingMessage { justify-self: start; border: 1px solid var(--border-strong); border-bottom-left-radius: 3px; background: #172635; }
+.outgoingMessage p,
+.incomingMessage p { font-size: 13px; line-height: 1.45; }
+.outgoingMessage time,
+.incomingMessage time { display: block; margin-top: 5px; font-size: 9px; opacity: 0.68; }
+.noResponse { justify-self: center; padding: 7px 10px; color: var(--muted); border: 1px dashed var(--border-strong); font-size: 11px; }
+.smsOutcome { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 13px; border-top: 1px solid var(--border); }
+.smsOutcome span { color: var(--muted-strong); font-size: 11px; font-weight: 800; }
+.smsOutcome small { color: var(--muted); font-size: 9px; text-align: right; }
+.smsOutcome[data-outcome="rescued"] span { color: var(--green); }
+.smsOutcome[data-outcome="lost"] span,
+.smsOutcome[data-outcome="no_response"] span { color: var(--red); }
+.smsEmpty { display: grid; min-height: 190px; place-items: center; align-content: center; gap: 8px; padding: 24px; color: var(--muted); text-align: center; }
+.smsEmpty > span { color: var(--cyan); letter-spacing: 0.35em; }
+.smsEmpty strong { color: var(--muted-strong); font-size: 13px; }
+.smsEmpty p { max-width: 240px; font-size: 11px; line-height: 1.5; }
+
+@keyframes messageIn {
+  from { opacity: 0; transform: translateY(5px); }
 }
 
 .panelHeading {
@@ -362,7 +436,6 @@
 .actionCell small { color: var(--muted); font-size: 11px; }
 .monitoring { color: var(--muted); }
 
-.feedPanel { position: sticky; top: 18px; }
 .feed { max-height: 560px; overflow-y: auto; list-style: none; }
 .feed li {
   position: relative;
@@ -384,7 +457,11 @@
 }
 .feed li[data-event="rescue_triggered"] .feedDot { background: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
 .feed li[data-event="payment_failed"] .feedDot,
-.feed li[data-event="checkout_abandoned"] .feedDot { background: var(--red); box-shadow: 0 0 0 1px var(--red); }
+.feed li[data-event="checkout_abandoned"] .feedDot,
+.feed li[data-event="rescue_failed"] .feedDot { background: var(--red); box-shadow: 0 0 0 1px var(--red); }
+.feed li[data-event="sms_sent"] .feedDot,
+.feed li[data-event="sms_received"] .feedDot,
+.feed li[data-event="booking_rescued"] .feedDot { background: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
 .feed strong { font-size: 13px; }
 .feed p { margin-top: 4px; color: var(--muted-strong); font-size: 12px; }
 .feed time { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
@@ -452,12 +529,19 @@
 .detailAction > strong { color: var(--cyan); font-size: 14px; }
 .detailAction > span { color: var(--muted-strong); font-size: 12px; line-height: 1.5; }
 .detailAction > small { color: var(--muted); font-size: 11px; }
+.detailSms { display: grid; gap: 10px; margin-top: 20px; padding: 18px; border: 1px solid var(--border); background: var(--surface); }
+.detailSms > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.detailSms > strong { font-size: 13px; }
+.detailSms blockquote { justify-self: end; max-width: 90%; padding: 11px 12px; color: #031310; border-radius: 12px 12px 3px 12px; background: var(--cyan); font-size: 13px; line-height: 1.5; }
+.detailSms .detailReply { justify-self: start; color: var(--foreground); border: 1px solid var(--border-strong); border-radius: 12px 12px 12px 3px; background: #172635; }
+.detailSms small { color: var(--muted); font-size: 11px; text-align: right; }
+.detailSms b { color: var(--muted-strong); font-size: 11px; text-transform: uppercase; }
 
 @media (max-width: 1180px) {
   .header { align-items: flex-start; flex-direction: column; }
   .headerControls { justify-content: flex-start; }
   .workspace { grid-template-columns: 1fr; }
-  .feedPanel { position: static; }
+  .rightRail { position: static; }
   .feed { max-height: 380px; }
 }
 
@@ -482,4 +566,6 @@
 @media (prefers-reduced-motion: reduce) {
   .liveState[data-live="true"] > span { animation: none; }
   .progressTrack span { transition: none; }
+  .outgoingMessage,
+  .incomingMessage { animation: none; }
 }

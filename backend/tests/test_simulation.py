@@ -5,7 +5,13 @@ from fastapi.testclient import TestClient
 
 from app.data.profiles import RENTERS
 from app.main import app
-from app.models import BookingStatus, EventType, MessageSource, RescueActionStatus
+from app.models import (
+    BookingStatus,
+    EventType,
+    MessageSource,
+    RescueActionStatus,
+    RescueOutcome,
+)
 from app.services.simulation import (
     SIMULATION_ENGINE,
     ScenarioType,
@@ -48,18 +54,17 @@ def test_accelerated_run_generates_events_and_valid_mixed_outcomes() -> None:
     assert [event.timestamp for event in completed.events] == sorted(
         event.timestamp for event in completed.events
     )
-    assert sum(
-        booking.status is BookingStatus.AT_RISK for booking in completed.bookings
-    ) == 2
+    assert sum(booking.status is BookingStatus.LOST for booking in completed.bookings) == 1
     assert sum(
         booking.status is BookingStatus.COMPLETED for booking in completed.bookings
-    ) == 1
+    ) == 2
     assert len(completed.scores) == 3
     assert completed.rescue_actions
     assert all(
-        action.status is RescueActionStatus.GENERATED
+        action.status is RescueActionStatus.SENT
         for action in completed.rescue_actions
     )
+    assert all(action.sent_at for action in completed.rescue_actions)
     assert all(action.message_text for action in completed.rescue_actions)
     assert all(
         action.message_source is MessageSource.FALLBACK_TEMPLATE
@@ -72,6 +77,14 @@ def test_accelerated_run_generates_events_and_valid_mixed_outcomes() -> None:
         }
     ) == len(completed.rescue_actions)
     assert any(
+        action.outcome is RescueOutcome.RESCUED
+        for action in completed.rescue_actions
+    )
+    assert any(
+        action.outcome in {RescueOutcome.NO_RESPONSE, RescueOutcome.LOST}
+        for action in completed.rescue_actions
+    )
+    assert any(
         event.event_type is EventType.RESCUE_SCORE_CHANGED
         for event in completed.events
     )
@@ -79,6 +92,14 @@ def test_accelerated_run_generates_events_and_valid_mixed_outcomes() -> None:
         event.event_type is EventType.RESCUE_TRIGGERED for event in completed.events
     )
     assert any(event.event_type is EventType.SMS_GENERATED for event in completed.events)
+    assert sum(
+        event.event_type is EventType.SMS_SENT for event in completed.events
+    ) == len(completed.rescue_actions)
+    assert any(event.event_type is EventType.SMS_RECEIVED for event in completed.events)
+    assert any(
+        event.event_type is EventType.BOOKING_RESCUED for event in completed.events
+    )
+    assert any(event.event_type is EventType.RESCUE_FAILED for event in completed.events)
     generation_events = [
         event for event in completed.events if event.event_type is EventType.SMS_GENERATED
     ]
@@ -90,6 +111,23 @@ def test_accelerated_run_generates_events_and_valid_mixed_outcomes() -> None:
         score.raw_score == sum(reason.points for reason in score.reasons)
         for score in completed.scores.values()
     )
+
+
+def test_reset_cancels_pending_demo_sms_delivery() -> None:
+    engine = SimulationEngine(duration_seconds=1)
+    engine.start(seed=42)
+
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and not engine.snapshot().rescue_actions:
+        time.sleep(0.005)
+    assert engine.snapshot().rescue_actions
+
+    reset = engine.reset()
+    time.sleep(0.02)
+
+    assert reset.status is SimulationStatus.IDLE
+    assert engine.snapshot().events == ()
+    assert engine.snapshot().rescue_actions == ()
 
 
 def test_generated_booking_values_and_dates_follow_profile_ranges() -> None:

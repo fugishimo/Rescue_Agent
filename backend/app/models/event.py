@@ -25,6 +25,7 @@ class EventType(StrEnum):
     SMS_GENERATED = "sms_generated"
     SMS_SENT = "sms_sent"
     SMS_RECEIVED = "sms_received"
+    BOOKING_RESCUED = "booking_rescued"
     BOOKING_COMPLETED = "booking_completed"
     BOOKING_CANCELED = "booking_canceled"
     RESCUE_FAILED = "rescue_failed"

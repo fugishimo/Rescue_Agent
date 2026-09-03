@@ -22,11 +22,12 @@ from app.models import (
     Renter,
     RescueAction,
     RescueActionStatus,
+    RescueOutcome,
     RescueTarget,
 )
+from app.services.messaging import MessagingService, build_rescue_message_context
 from app.services.rescue_rules import GuardrailCode, evaluate_rescue_rules
 from app.services.rescue_scoring import RescueScore, calculate_rescue_score
-from app.services.messaging import MessagingService, build_rescue_message_context
 
 
 class SimulationStatus(StrEnum):
@@ -107,6 +108,14 @@ class _JourneyPlan:
     steps: tuple[_EventStep, ...]
 
 
+@dataclass(frozen=True)
+class _ResponsePlan:
+    should_respond: bool
+    successful: bool
+    response_text: str | None
+    outcome: RescueOutcome
+
+
 _ALLOWED_TRANSITIONS: dict[BookingStatus, set[BookingStatus]] = {
     BookingStatus.BROWSING: {
         BookingStatus.BROWSING,
@@ -160,6 +169,9 @@ class SimulationEngine:
         self._lock = threading.RLock()
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
+        self._delivery_threads: list[threading.Thread] = []
+        self._response_rng = random.Random()
+        self._planned_action_count = 0
         self._autopilot_enabled = True
         self._run_id: str | None = None
         self._seed: int | None = None
@@ -189,6 +201,9 @@ class SimulationEngine:
             plan = self._schedule_events(journeys, rng)
 
             self._cancel = threading.Event()
+            self._delivery_threads = []
+            self._response_rng = random.Random(chosen_seed ^ 0x5A17C0DE)
+            self._planned_action_count = 0
             self._run_id = run_id
             self._seed = chosen_seed
             self._status = SimulationStatus.RUNNING
@@ -217,14 +232,19 @@ class SimulationEngine:
     def reset(self) -> SimulationSnapshot:
         with self._lock:
             thread = self._thread
+            delivery_threads = tuple(self._delivery_threads)
             cancel = self._cancel
             cancel.set()
 
         if thread is not None and thread.is_alive():
             thread.join(timeout=2)
+        for delivery_thread in delivery_threads:
+            if delivery_thread.is_alive():
+                delivery_thread.join(timeout=2)
 
         with self._lock:
             self._thread = None
+            self._delivery_threads = []
             self._run_id = None
             self._seed = None
             self._status = SimulationStatus.IDLE
@@ -285,6 +305,13 @@ class SimulationEngine:
             next_status = planned_event.step.next_status
             allowed = _ALLOWED_TRANSITIONS[booking.status]
             if next_status not in allowed:
+                if booking.status in {
+                    BookingStatus.RESCUED,
+                    BookingStatus.COMPLETED,
+                    BookingStatus.LOST,
+                }:
+                    self._processed_planned_events += 1
+                    return
                 raise RuntimeError(
                     f"invalid simulation transition: {booking.status} -> {next_status}"
                 )
@@ -452,6 +479,21 @@ class SimulationEngine:
                     },
                 )
             )
+            response_plan = self._plan_response(generated_action, recipient)
+            delivery_thread = threading.Thread(
+                target=self._deliver_action,
+                args=(
+                    self._run_id,
+                    generated_action.id,
+                    recipient.name,
+                    response_plan,
+                    self._cancel,
+                ),
+                name=f"delivery-{generated_action.id}",
+                daemon=True,
+            )
+            self._delivery_threads.append(delivery_thread)
+            delivery_thread.start()
             return
 
         if (
@@ -474,6 +516,234 @@ class SimulationEngine:
                         },
                     )
                 )
+
+    def _plan_response(
+        self,
+        action: RescueAction,
+        recipient: Renter | Lister,
+    ) -> _ResponsePlan:
+        successful = self._planned_action_count == 0
+        self._planned_action_count += 1
+
+        if successful:
+            return _ResponsePlan(
+                should_respond=True,
+                successful=True,
+                response_text=self._positive_response(recipient),
+                outcome=RescueOutcome.RESCUED,
+            )
+
+        if action.target_type is RescueTarget.RENTER:
+            return _ResponsePlan(
+                should_respond=False,
+                successful=False,
+                response_text=None,
+                outcome=RescueOutcome.NO_RESPONSE,
+            )
+
+        should_respond = self._response_rng.random() < recipient.sms_response_rate
+        return _ResponsePlan(
+            should_respond=should_respond,
+            successful=False,
+            response_text=(
+                self._negative_lister_response(recipient)
+                if should_respond and isinstance(recipient, Lister)
+                else None
+            ),
+            outcome=(
+                RescueOutcome.LOST if should_respond else RescueOutcome.NO_RESPONSE
+            ),
+        )
+
+    def _positive_response(self, recipient: Renter | Lister) -> str:
+        if isinstance(recipient, Renter) and recipient.successful_sms_response:
+            return recipient.successful_sms_response
+        if isinstance(recipient, Lister) and recipient.representative_sms_response:
+            response = recipient.representative_sms_response
+            if not _looks_negative(response):
+                return response
+        options = (
+            ("Yes, those dates are available.", "Those dates work.")
+            if isinstance(recipient, Lister)
+            else (
+                "Yes, I'm still interested.",
+                "Got it — I'll finish the booking now.",
+            )
+        )
+        return self._response_rng.choice(options)
+
+    def _negative_lister_response(self, recipient: Lister) -> str:
+        if recipient.representative_sms_response and _looks_negative(
+            recipient.representative_sms_response
+        ):
+            return recipient.representative_sms_response
+        return self._response_rng.choice(
+            (
+                "Sorry, those dates won't work.",
+                "The space isn't available anymore.",
+                "I can't accommodate that move-in date.",
+            )
+        )
+
+    def _deliver_action(
+        self,
+        run_id: str | None,
+        action_id: str,
+        recipient_name: str,
+        plan: _ResponsePlan,
+        cancel: threading.Event,
+    ) -> None:
+        if cancel.wait(self._scaled_delay(0.4)):
+            return
+        with self._lock:
+            action_index = self._action_index(run_id, action_id)
+            if action_index is None:
+                return
+            action = self._rescue_actions[action_index]
+            sent_at = datetime.now(timezone.utc)
+            self._rescue_actions[action_index] = action.model_copy(
+                update={"status": RescueActionStatus.SENT, "sent_at": sent_at}
+            )
+            self._events.append(
+                Event(
+                    id=f"event_{uuid4().hex[:12]}",
+                    booking_id=action.booking_id,
+                    event_type=EventType.SMS_SENT,
+                    timestamp=sent_at,
+                    metadata={
+                        "action_id": action.id,
+                        "recipient_name": recipient_name,
+                        "target": action.target_type.value,
+                        "intervention": action.intervention_type.value,
+                        "demo_mode": True,
+                    },
+                )
+            )
+
+        if cancel.wait(self._scaled_delay(2.5)):
+            return
+        with self._lock:
+            action_index = self._action_index(run_id, action_id)
+            if action_index is None:
+                return
+            action = self._rescue_actions[action_index]
+            outcome_at = datetime.now(timezone.utc)
+            self._rescue_actions[action_index] = action.model_copy(
+                update={
+                    "response_text": plan.response_text,
+                    "response_at": outcome_at if plan.should_respond else None,
+                    "outcome": plan.outcome,
+                }
+            )
+            if plan.should_respond:
+                self._events.append(
+                    Event(
+                        id=f"event_{uuid4().hex[:12]}",
+                        booking_id=action.booking_id,
+                        event_type=EventType.SMS_RECEIVED,
+                        timestamp=outcome_at,
+                        metadata={
+                            "action_id": action.id,
+                            "recipient_name": recipient_name,
+                            "response_text": plan.response_text,
+                            "demo_mode": True,
+                        },
+                    )
+                )
+
+            booking = self._bookings[action.booking_id]
+            if plan.successful:
+                self._bookings[action.booking_id] = booking.model_copy(
+                    update={
+                        "status": BookingStatus.RESCUED,
+                        "rescued_at": outcome_at,
+                        "last_activity_at": outcome_at,
+                    }
+                )
+                self._events.append(
+                    Event(
+                        id=f"event_{uuid4().hex[:12]}",
+                        booking_id=action.booking_id,
+                        event_type=EventType.BOOKING_RESCUED,
+                        timestamp=outcome_at,
+                        metadata={
+                            "action_id": action.id,
+                            "booking_value": booking.booking_value,
+                            "outcome": RescueOutcome.RESCUED.value,
+                        },
+                    )
+                )
+            else:
+                self._bookings[action.booking_id] = booking.model_copy(
+                    update={
+                        "status": BookingStatus.LOST,
+                        "last_activity_at": outcome_at,
+                    }
+                )
+                self._events.append(
+                    Event(
+                        id=f"event_{uuid4().hex[:12]}",
+                        booking_id=action.booking_id,
+                        event_type=EventType.RESCUE_FAILED,
+                        timestamp=outcome_at,
+                        metadata={
+                            "action_id": action.id,
+                            "outcome": plan.outcome.value,
+                            "reason": (
+                                "Recipient did not respond"
+                                if not plan.should_respond
+                                else "Recipient could not continue the booking"
+                            ),
+                        },
+                    )
+                )
+
+        if not plan.successful or cancel.wait(self._scaled_delay(0.5)):
+            return
+        with self._lock:
+            action_index = self._action_index(run_id, action_id)
+            if action_index is None:
+                return
+            action = self._rescue_actions[action_index]
+            booking = self._bookings[action.booking_id]
+            if booking.status is not BookingStatus.RESCUED:
+                return
+            completed_at = datetime.now(timezone.utc)
+            self._bookings[action.booking_id] = booking.model_copy(
+                update={
+                    "status": BookingStatus.COMPLETED,
+                    "completed_at": completed_at,
+                    "last_activity_at": completed_at,
+                }
+            )
+            self._events.append(
+                Event(
+                    id=f"event_{uuid4().hex[:12]}",
+                    booking_id=action.booking_id,
+                    event_type=EventType.BOOKING_COMPLETED,
+                    timestamp=completed_at,
+                    metadata={
+                        "action_id": action.id,
+                        "outcome": RescueOutcome.RESCUED.value,
+                        "rescued_booking": True,
+                    },
+                )
+            )
+
+    def _action_index(self, run_id: str | None, action_id: str) -> int | None:
+        if self._run_id != run_id or self._status is not SimulationStatus.RUNNING:
+            return None
+        return next(
+            (
+                index
+                for index, action in enumerate(self._rescue_actions)
+                if action.id == action_id
+            ),
+            None,
+        )
+
+    def _scaled_delay(self, normal_run_seconds: float) -> float:
+        return max(0.001, normal_run_seconds * (self.duration_seconds / 90))
 
     def _snapshot_locked(self) -> SimulationSnapshot:
         elapsed = self._elapsed_locked()
@@ -762,6 +1032,21 @@ class SimulationEngine:
                 )
             )
         return tuple(planned)
+
+
+def _looks_negative(response: str) -> bool:
+    lowered = response.casefold()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "sorry",
+            "won't",
+            "isn't",
+            "not available",
+            "can't",
+            "cannot",
+        )
+    )
 
 
 SIMULATION_ENGINE = SimulationEngine(

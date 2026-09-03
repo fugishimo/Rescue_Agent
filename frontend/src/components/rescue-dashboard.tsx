@@ -47,6 +47,10 @@ function eventLabel(event: MarketplaceEvent) {
     rescue_triggered: "Rescue action triggered",
     autopilot_action_held: "Action held by operator",
     sms_generated: "SMS wording generated",
+    sms_sent: "Demo SMS sent",
+    sms_received: "Simulated reply received",
+    booking_rescued: "Booking rescued",
+    rescue_failed: "Rescue unsuccessful",
     booking_completed: "Booking completed",
   };
   return labels[event.event_type] ?? words(event.event_type);
@@ -90,6 +94,74 @@ function MetricCard({
       <strong>{value}</strong>
       <span>{note}</span>
     </article>
+  );
+}
+
+function SmsDemoPanel({
+  action,
+  recipientName,
+  listingName,
+}: {
+  action: RescueAction | null;
+  recipientName: string;
+  listingName: string;
+}) {
+  const outcomeLabel = action?.outcome === "pending"
+    ? action.status === "sent" ? "Awaiting simulated reply" : "Preparing demo message"
+    : action?.outcome === "rescued" ? "Booking rescued"
+      : action?.outcome === "no_response" ? "No response"
+        : action?.outcome === "lost" ? "Booking lost" : "Still at risk";
+
+  return (
+    <aside className={styles.smsPanel} aria-live="polite">
+      <div className={styles.smsHeader}>
+        <div>
+          <p>SIMULATED SMS</p>
+          <h2>Rescue inbox</h2>
+        </div>
+        <span>DEMO · NO REAL SEND</span>
+      </div>
+      {action ? (
+        <div className={styles.phoneFrame}>
+          <div className={styles.phoneTop}>
+            <span aria-hidden="true" />
+            <div>
+              <strong>{recipientName}</strong>
+              <small>{words(action.target_type)} · {listingName}</small>
+            </div>
+          </div>
+          <div className={styles.messageThread}>
+            <div className={styles.outgoingMessage}>
+              <p>{action.message_text ?? "Generating outreach…"}</p>
+              <time dateTime={action.sent_at ?? undefined}>
+                {action.sent_at ? `Demo sent ${shortTime(action.sent_at)}` : words(action.status)}
+              </time>
+            </div>
+            {action.response_text && (
+              <div className={styles.incomingMessage}>
+                <p>{action.response_text}</p>
+                {action.response_at && (
+                  <time dateTime={action.response_at}>Simulated reply {shortTime(action.response_at)}</time>
+                )}
+              </div>
+            )}
+            {action.outcome === "no_response" && (
+              <p className={styles.noResponse}>No simulated reply received.</p>
+            )}
+          </div>
+          <div className={styles.smsOutcome} data-outcome={action.outcome}>
+            <span>{outcomeLabel}</span>
+            <small>{action.message_source === "openai" ? "AI-generated copy" : "Guardrailed fallback copy"}</small>
+          </div>
+        </div>
+      ) : (
+        <div className={styles.smsEmpty}>
+          <span aria-hidden="true">•••</span>
+          <strong>Demo inbox ready</strong>
+          <p>A qualifying rescue will appear here as a simulated text conversation.</p>
+        </div>
+      )}
+    </aside>
   );
 }
 
@@ -176,6 +248,15 @@ export function RescueDashboard() {
   const selectedAction = selectedBooking
     ? actions.get(selectedBooking.id) ?? null
     : null;
+  const latestAction = snapshot?.rescue_actions.at(-1) ?? null;
+  const latestBooking = latestAction
+    ? bookings.find((booking) => booking.id === latestAction.booking_id) ?? null
+    : null;
+  const latestRecipientName = latestAction?.target_type === "renter"
+    ? renters.get(latestAction.target_id)?.name ?? "Demo renter"
+    : listers.get(latestAction?.target_id ?? "")?.name ?? "Demo lister";
+  const latestListingName = listings.get(latestBooking?.listing_id ?? "")?.name
+    ?? "Marketplace listing";
 
   const status = snapshot?.status ?? "idle";
   const isRunning = status === "running";
@@ -347,33 +428,40 @@ export function RescueDashboard() {
           </div>
         </section>
 
-        <aside className={styles.feedPanel}>
-          <div className={styles.panelHeading}>
-            <div><p>EVENT STREAM</p><h2>Live operations</h2></div>
-            <span>{snapshot?.processed_planned_events ?? 0}/{snapshot?.total_planned_events ?? 0}</span>
-          </div>
-          <ol className={styles.feed} aria-live="polite">
-            {(snapshot?.events ?? []).slice(-12).reverse().map((event) => {
-              const booking = bookings.find((item) => item.id === event.booking_id);
-              return (
-                <li key={event.id} data-event={event.event_type}>
-                  <span className={styles.feedDot} aria-hidden="true" />
-                  <div>
-                    <strong>{eventLabel(event)}</strong>
-                    <p>{renters.get(booking?.renter_id ?? "")?.name ?? "Marketplace activity"}</p>
-                    <time dateTime={event.timestamp}>{shortTime(event.timestamp)}</time>
-                  </div>
+        <div className={styles.rightRail}>
+          <SmsDemoPanel
+            action={latestAction}
+            recipientName={latestRecipientName}
+            listingName={latestListingName}
+          />
+          <aside className={styles.feedPanel}>
+            <div className={styles.panelHeading}>
+              <div><p>EVENT STREAM</p><h2>Live operations</h2></div>
+              <span>{snapshot?.processed_planned_events ?? 0}/{snapshot?.total_planned_events ?? 0}</span>
+            </div>
+            <ol className={styles.feed} aria-live="polite">
+              {(snapshot?.events ?? []).slice(-12).reverse().map((event) => {
+                const booking = bookings.find((item) => item.id === event.booking_id);
+                return (
+                  <li key={event.id} data-event={event.event_type}>
+                    <span className={styles.feedDot} aria-hidden="true" />
+                    <div>
+                      <strong>{eventLabel(event)}</strong>
+                      <p>{renters.get(booking?.renter_id ?? "")?.name ?? "Marketplace activity"}</p>
+                      <time dateTime={event.timestamp}>{shortTime(event.timestamp)}</time>
+                    </div>
+                  </li>
+                );
+              })}
+              {!snapshot?.events.length && (
+                <li className={styles.emptyFeed}>
+                  <strong>Operations feed ready</strong>
+                  <p>Start the simulation to stream marketplace events.</p>
                 </li>
-              );
-            })}
-            {!snapshot?.events.length && (
-              <li className={styles.emptyFeed}>
-                <strong>Operations feed ready</strong>
-                <p>Start the simulation to stream marketplace events.</p>
-              </li>
-            )}
-          </ol>
-        </aside>
+              )}
+            </ol>
+          </aside>
+        </div>
       </div>
 
       {selectedBooking && (
@@ -451,6 +539,21 @@ function BookingDetail({
             <><strong>Monitoring only</strong><span>No intervention has passed the rescue guardrails.</span></>
           )}
         </section>
+        {action?.message_text && (
+          <section className={styles.detailSms}>
+            <div>
+              <p>SIMULATED SMS THREAD</p>
+              <span>DEMO · NO REAL SEND</span>
+            </div>
+            <strong>To {action.target_type === "renter" ? renterName : listerName}</strong>
+            <blockquote>{action.message_text}</blockquote>
+            <small>{action.sent_at ? `Demo sent ${shortTime(action.sent_at)}` : `Status: ${words(action.status)}`}</small>
+            {action.response_text && (
+              <blockquote className={styles.detailReply}>{action.response_text}</blockquote>
+            )}
+            <b>Outcome: {words(action.outcome)}</b>
+          </section>
+        )}
       </aside>
     </div>
   );
