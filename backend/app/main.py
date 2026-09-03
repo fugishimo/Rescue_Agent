@@ -13,6 +13,7 @@ from app.data.seed_data import (
     ProfileCatalog,
 )
 from app.models import Booking, Event, Listing
+from app.services.analytics import ActivityResponse, build_activity_response
 from app.services.simulation import (
     SIMULATION_ENGINE,
     AutopilotRequest,
@@ -92,6 +93,15 @@ async def simulation_state() -> SimulationSnapshot:
 async def dashboard_state() -> SimulationSnapshot:
     """Return simulation state in the shape consumed by the future dashboard."""
     return SIMULATION_ENGINE.snapshot()
+
+
+@app.get("/activity", response_model=ActivityResponse, tags=["simulation"])
+async def activity_state() -> ActivityResponse:
+    """Return the coherent rescue audit trail and monthly impact summary."""
+    snapshot = SIMULATION_ENGINE.snapshot()
+    return build_activity_response(
+        list(snapshot.bookings), list(snapshot.events), list(snapshot.rescue_actions)
+    )
 
 
 @app.post(

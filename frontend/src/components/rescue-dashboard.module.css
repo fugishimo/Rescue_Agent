@@ -148,7 +148,8 @@
 }
 
 .primaryButton,
-.secondaryButton {
+.secondaryButton,
+.navLink {
   height: 42px;
   padding: 0 17px;
   border: 1px solid var(--cyan);
@@ -157,6 +158,15 @@
   font-size: 13px;
   font-weight: 800;
   cursor: pointer;
+}
+
+.navLink {
+  display: inline-grid;
+  place-items: center;
+  color: var(--cyan);
+  border-color: var(--border-strong);
+  background: transparent;
+  text-decoration: none;
 }
 
 .secondaryButton {

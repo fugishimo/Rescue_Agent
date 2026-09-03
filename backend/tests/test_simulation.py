@@ -20,6 +20,7 @@ from app.services.simulation import (
     SimulationSnapshot,
     SimulationStatus,
 )
+from app.services.analytics import build_activity_response, calculate_analytics
 
 
 def wait_for_completion(
@@ -130,6 +131,52 @@ def test_reset_cancels_pending_demo_sms_delivery() -> None:
     assert engine.snapshot().rescue_actions == ()
 
 
+def test_activity_log_and_gmv_attribution_stay_coherent() -> None:
+    engine = SimulationEngine(duration_seconds=0.15, speed_multiplier=30)
+    engine.start(seed=42)
+    completed = wait_for_completion(engine)
+
+    activity = build_activity_response(
+        list(completed.bookings),
+        list(completed.events),
+        list(completed.rescue_actions),
+    )
+    rescued_action = next(
+        action
+        for action in completed.rescue_actions
+        if action.outcome is RescueOutcome.RESCUED
+    )
+    rescued_booking = next(
+        booking
+        for booking in completed.bookings
+        if booking.id == rescued_action.booking_id
+    )
+
+    assert len(activity.records) == len(completed.rescue_actions)
+    assert activity.analytics == completed.analytics
+    assert activity.analytics.run_bookings_rescued == 1
+    assert activity.analytics.run_gmv_rescued == rescued_booking.booking_value
+    assert activity.analytics.monthly_gmv_rescued == 48_250 + rescued_booking.booking_value
+    assert activity.analytics.monthly_bookings_rescued == 31
+    assert activity.analytics.rescue_success_rate == 67.4
+    assert all(record.score_reasons for record in activity.records)
+    assert all(record.triggering_events for record in activity.records)
+    assert all(record.agent_explanation for record in activity.records)
+    assert sum(record.gmv_attributed for record in activity.records) == rescued_booking.booking_value
+    assert all(
+        record.gmv_attributed == 0
+        for record in activity.records
+        if record.outcome != RescueOutcome.RESCUED.value
+    )
+
+    duplicate = rescued_action.model_copy(update={"id": "duplicate_action"})
+    duplicate_safe = calculate_analytics(
+        list(completed.bookings), [*completed.rescue_actions, duplicate]
+    )
+    assert duplicate_safe.run_bookings_rescued == 1
+    assert duplicate_safe.run_gmv_rescued == rescued_booking.booking_value
+
+
 def test_generated_booking_values_and_dates_follow_profile_ranges() -> None:
     engine = SimulationEngine(duration_seconds=0.05)
     renters = {renter.id: renter for renter in RENTERS}
@@ -212,6 +259,7 @@ def test_simulation_api_start_conflict_dashboard_and_reset() -> None:
         start_response = client.post("/simulation/start", json={"seed": 73})
         conflict_response = client.post("/simulation/start")
         dashboard_response = client.get("/dashboard")
+        activity_response = client.get("/activity")
         reset_response = client.post("/simulation/reset")
 
     assert idle_response.status_code == 200
@@ -227,6 +275,9 @@ def test_simulation_api_start_conflict_dashboard_and_reset() -> None:
     assert conflict_response.status_code == 409
     assert dashboard_response.status_code == 200
     assert dashboard_response.json()["run_id"] == start_response.json()["run_id"]
+    assert activity_response.status_code == 200
+    assert activity_response.json()["analytics"] == dashboard_response.json()["analytics"]
+    assert activity_response.json()["records"] == []
     assert reset_response.status_code == 200
     assert reset_response.json()["status"] == "idle"
     assert reset_response.json()["events"] == []

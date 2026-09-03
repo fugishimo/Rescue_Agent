@@ -26,6 +26,7 @@ from app.models import (
     RescueTarget,
 )
 from app.services.messaging import MessagingService, build_rescue_message_context
+from app.services.analytics import RescueAnalytics, calculate_analytics
 from app.services.rescue_rules import GuardrailCode, evaluate_rescue_rules
 from app.services.rescue_scoring import RescueScore, calculate_rescue_score
 
@@ -71,6 +72,7 @@ class SimulationSnapshot(BaseModel):
     events: tuple[Event, ...]
     scores: dict[str, RescueScore]
     rescue_actions: tuple[RescueAction, ...]
+    analytics: RescueAnalytics
 
 
 class SimulationStartRequest(BaseModel):
@@ -318,7 +320,16 @@ class SimulationEngine:
 
             event_time = datetime.now(timezone.utc)
             self._bookings[booking.id] = booking.model_copy(
-                update={"status": next_status, "last_activity_at": event_time}
+                update={
+                    "status": next_status,
+                    "last_activity_at": event_time,
+                    **(
+                        {"at_risk_at": event_time}
+                        if next_status is BookingStatus.AT_RISK
+                        and booking.at_risk_at is None
+                        else {}
+                    ),
+                }
             )
             self._events.append(
                 Event(
@@ -431,6 +442,10 @@ class SimulationEngine:
                         "target": score.target.value,
                         "intervention": score.recommended_intervention.value,
                         "explanation": score.explanation,
+                        "trigger_code": score.trigger_code,
+                        "score_reasons": [
+                            reason.model_dump(mode="json") for reason in score.reasons
+                        ],
                         "status": RescueActionStatus.PENDING.value,
                     },
                 )
@@ -766,6 +781,9 @@ class SimulationEngine:
             events=tuple(self._events),
             scores=dict(self._scores),
             rescue_actions=tuple(self._rescue_actions),
+            analytics=calculate_analytics(
+                tuple(self._bookings.values()), self._rescue_actions
+            ),
         )
 
     def _elapsed_locked(self) -> float:

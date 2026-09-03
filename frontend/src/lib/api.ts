@@ -1,4 +1,4 @@
-import type { MarketplaceSeed, SimulationSnapshot } from "./types";
+import type { ActivityResponse, MarketplaceSeed, SimulationSnapshot } from "./types";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -25,6 +25,10 @@ export function getMarketplaceSeed() {
 
 export function getDashboard() {
   return request<SimulationSnapshot>("/dashboard", { cache: "no-store" });
+}
+
+export function getActivity() {
+  return request<ActivityResponse>("/activity", { cache: "no-store" });
 }
 
 export function startSimulation() {

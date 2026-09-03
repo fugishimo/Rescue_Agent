@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 import {
   getDashboard,
@@ -293,6 +294,7 @@ export function RescueDashboard() {
           <p>Live marketplace intervention console</p>
         </div>
         <div className={styles.headerControls}>
+          <Link className={styles.navLink} href="/activity">Activity log</Link>
           <div className={styles.liveState} data-live={isRunning}>
             <span aria-hidden="true" />
             {isRunning ? "LIVE" : status === "completed" ? "RUN COMPLETE" : "STANDBY"}
@@ -350,13 +352,28 @@ export function RescueDashboard() {
       )}
 
       <section className={styles.metrics} aria-label="Marketplace performance">
-        <MetricCard label="GMV rescued" value="$52,840" note="Current monthly total" tone="cyan" />
-        <MetricCard label="Bookings rescued" value="31" note="Current monthly total" tone="cyan" />
-        <MetricCard label="Rescue success rate" value="68%" note="Completed interventions" tone="cyan" />
         <MetricCard
-          label="Active bookings"
-          value="14"
-          note={`${bookings.length} live cases · ${highRiskCount} need attention`}
+          label="GMV rescued"
+          value={money.format(snapshot?.analytics.monthly_gmv_rescued ?? 48_250)}
+          note={`Baseline + ${money.format(snapshot?.analytics.run_gmv_rescued ?? 0)} this run`}
+          tone="cyan"
+        />
+        <MetricCard
+          label="Bookings rescued"
+          value={String(snapshot?.analytics.monthly_bookings_rescued ?? 30)}
+          note={`${snapshot?.analytics.run_bookings_rescued ?? 0} added this run`}
+          tone="cyan"
+        />
+        <MetricCard
+          label="Rescue success rate"
+          value={`${snapshot?.analytics.rescue_success_rate ?? 68.2}%`}
+          note="Resolved monthly interventions"
+          tone="cyan"
+        />
+        <MetricCard
+          label="Active rescue cases"
+          value={String(snapshot?.analytics.active_rescue_cases ?? 0)}
+          note={`${bookings.length} live bookings · ${highRiskCount} elevated`}
           tone={highRiskCount ? "amber" : undefined}
         />
       </section>

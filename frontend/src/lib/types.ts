@@ -100,6 +100,57 @@ export interface SimulationSnapshot {
   events: MarketplaceEvent[];
   scores: Record<string, RescueScore>;
   rescue_actions: RescueAction[];
+  analytics: RescueAnalytics;
+}
+
+export interface RescueAnalytics {
+  baseline_gmv_rescued: number;
+  baseline_bookings_rescued: number;
+  run_gmv_rescued: number;
+  run_bookings_rescued: number;
+  monthly_gmv_rescued: number;
+  monthly_bookings_rescued: number;
+  rescue_success_rate: number;
+  active_rescue_cases: number;
+  total_demo_sms_sent: number;
+}
+
+export interface ActivityScoreReason {
+  code: string;
+  label: string;
+  points: number;
+}
+
+export interface ActivityRecord {
+  id: string;
+  action_id: string;
+  timestamp: string;
+  booking_id: string;
+  booking_label: string;
+  renter_name: string;
+  listing_name: string;
+  target_type: string;
+  target_name: string;
+  trigger: string;
+  triggering_events: string[];
+  score: number;
+  score_reasons: ActivityScoreReason[];
+  agent_explanation: string;
+  intervention: string;
+  message_text: string | null;
+  message_source: string | null;
+  message_status: string;
+  sent_at: string | null;
+  response_text: string | null;
+  response_at: string | null;
+  outcome: string;
+  resulting_booking_state: string;
+  gmv_attributed: number;
+}
+
+export interface ActivityResponse {
+  analytics: RescueAnalytics;
+  records: ActivityRecord[];
 }
 
 export interface MarketplaceSeed {

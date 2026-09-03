@@ -45,6 +45,7 @@ With the backend running, seeded data and live engine state are available from:
 - `POST /simulation/start` — start a randomized 90-second run
 - `POST /simulation/reset` — stop and clear the current run
 - `GET /dashboard` — polling-friendly simulation snapshot
+- `GET /activity` — rescue audit records and coherent monthly impact metrics
 - `POST /autopilot` — enable or disable automatic rescue actions
 
 Qualifying rescue actions contain validated SMS wording and record whether it
@@ -70,6 +71,11 @@ console. Start a simulation to watch booking events, scores, rescue targets, and
 autopilot decisions update without refreshing the page. The simulated SMS inbox
 shows the latest outreach, recipient, reply, and outcome. Select any booking row
 to inspect its score breakdown, agent explanation, and full demo message thread.
+
+Open `http://localhost:3000/activity` to inspect every intervention in the
+current run. Each record retains its trigger, score evidence, explanation,
+message, simulated response, resulting booking state, and any rescued GMV. The
+dashboard and activity page use the same duplicate-safe monthly analytics.
 
 ## Run checks
 
