@@ -35,6 +35,10 @@ With the backend running, the Phase 2 data is available from:
 - `GET /bookings` — valid seeded booking journeys
 - `GET /events` — booking event history
 - `GET /marketplace/seed` — the complete seed payload
+- `GET /simulation` — current live run state
+- `POST /simulation/start` — start a randomized 90-second run
+- `POST /simulation/reset` — stop and clear the current run
+- `GET /dashboard` — polling-friendly simulation snapshot
 
 Interactive API documentation is available at `http://localhost:8000/docs`.
 

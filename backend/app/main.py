@@ -1,6 +1,6 @@
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.data.seed_data import (
@@ -13,6 +13,12 @@ from app.data.seed_data import (
     ProfileCatalog,
 )
 from app.models import Booking, Event, Listing
+from app.services.simulation import (
+    SIMULATION_ENGINE,
+    SimulationAlreadyRunningError,
+    SimulationSnapshot,
+    SimulationStartRequest,
+)
 
 
 def _cors_origins() -> list[str]:
@@ -73,3 +79,40 @@ async def events() -> tuple[Event, ...]:
 async def marketplace_seed() -> MarketplaceSeed:
     """Return all seeded marketplace data in one inspectable payload."""
     return MARKETPLACE_SEED
+
+
+@app.get("/simulation", response_model=SimulationSnapshot, tags=["simulation"])
+async def simulation_state() -> SimulationSnapshot:
+    """Return the current live simulation snapshot."""
+    return SIMULATION_ENGINE.snapshot()
+
+
+@app.get("/dashboard", response_model=SimulationSnapshot, tags=["simulation"])
+async def dashboard_state() -> SimulationSnapshot:
+    """Return simulation state in the shape consumed by the future dashboard."""
+    return SIMULATION_ENGINE.snapshot()
+
+
+@app.post(
+    "/simulation/start",
+    response_model=SimulationSnapshot,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["simulation"],
+)
+async def start_simulation(
+    request: SimulationStartRequest | None = None,
+) -> SimulationSnapshot:
+    """Start one randomized 90-second marketplace simulation."""
+    try:
+        return SIMULATION_ENGINE.start(seed=request.seed if request else None)
+    except SimulationAlreadyRunningError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+
+
+@app.post("/simulation/reset", response_model=SimulationSnapshot, tags=["simulation"])
+async def reset_simulation() -> SimulationSnapshot:
+    """Stop the current run and restore clean idle state."""
+    return SIMULATION_ENGINE.reset()

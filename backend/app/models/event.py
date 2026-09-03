@@ -13,6 +13,7 @@ class EventType(StrEnum):
     BOOKING_STARTED = "booking_started"
     BOOKING_REQUESTED = "booking_requested"
     LISTER_NOTIFIED = "lister_notified"
+    LISTER_RESPONSE_DELAYED = "lister_response_delayed"
     AVAILABILITY_REQUESTED = "availability_requested"
     AVAILABILITY_CONFIRMED = "availability_confirmed"
     CHECKOUT_ABANDONED = "checkout_abandoned"
