@@ -21,6 +21,7 @@ class EventType(StrEnum):
     RENTER_INACTIVE = "renter_inactive"
     RESCUE_SCORE_CHANGED = "rescue_score_changed"
     RESCUE_TRIGGERED = "rescue_triggered"
+    AUTOPILOT_ACTION_HELD = "autopilot_action_held"
     SMS_GENERATED = "sms_generated"
     SMS_SENT = "sms_sent"
     SMS_RECEIVED = "sms_received"

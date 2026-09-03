@@ -12,7 +12,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.data.profiles import LISTERS, RENTERS
 from app.data.seed_data import LISTINGS
-from app.models import Booking, BookingStatus, Event, EventType, Lister, Listing, Renter
+from app.models import (
+    Booking,
+    BookingStatus,
+    Event,
+    EventType,
+    Lister,
+    Listing,
+    Renter,
+    RescueAction,
+    RescueActionStatus,
+    RescueTarget,
+)
+from app.services.rescue_rules import GuardrailCode, evaluate_rescue_rules
+from app.services.rescue_scoring import RescueScore, calculate_rescue_score
 
 
 class SimulationStatus(StrEnum):
@@ -44,18 +57,26 @@ class SimulationSnapshot(BaseModel):
     status: SimulationStatus
     duration_seconds: float
     speed_multiplier: int
+    autopilot_enabled: bool
     started_at: datetime | None
     completed_at: datetime | None
     elapsed_seconds: float = Field(ge=0)
     progress_percent: float = Field(ge=0, le=100)
     total_planned_events: int = Field(ge=0)
+    processed_planned_events: int = Field(ge=0)
     selected_journeys: tuple[SelectedJourney, ...]
     bookings: tuple[Booking, ...]
     events: tuple[Event, ...]
+    scores: dict[str, RescueScore]
+    rescue_actions: tuple[RescueAction, ...]
 
 
 class SimulationStartRequest(BaseModel):
     seed: int | None = None
+
+
+class AutopilotRequest(BaseModel):
+    enabled: bool
 
 
 class SimulationAlreadyRunningError(RuntimeError):
@@ -132,6 +153,7 @@ class SimulationEngine:
         self._lock = threading.RLock()
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
+        self._autopilot_enabled = True
         self._run_id: str | None = None
         self._seed: int | None = None
         self._status = SimulationStatus.IDLE
@@ -142,6 +164,10 @@ class SimulationEngine:
         self._bookings: dict[str, Booking] = {}
         self._events: list[Event] = []
         self._plan: tuple[_PlannedEvent, ...] = ()
+        self._processed_planned_events = 0
+        self._scores: dict[str, RescueScore] = {}
+        self._rescue_actions: list[RescueAction] = []
+        self._held_triggers: set[tuple[str, str]] = set()
 
     def start(self, seed: int | None = None) -> SimulationSnapshot:
         with self._lock:
@@ -166,6 +192,12 @@ class SimulationEngine:
             self._bookings = {journey.booking.id: journey.booking for journey in journeys}
             self._events = []
             self._plan = plan
+            self._processed_planned_events = 0
+            self._scores = {}
+            self._rescue_actions = []
+            self._held_triggers = set()
+            for booking_id in self._bookings:
+                self._refresh_score(booking_id, record_event=False)
             self._thread = threading.Thread(
                 target=self._run,
                 args=(run_id, self._cancel),
@@ -196,10 +228,22 @@ class SimulationEngine:
             self._bookings = {}
             self._events = []
             self._plan = ()
+            self._processed_planned_events = 0
+            self._scores = {}
+            self._rescue_actions = []
+            self._held_triggers = set()
             return self._snapshot_locked()
 
     def snapshot(self) -> SimulationSnapshot:
         with self._lock:
+            return self._snapshot_locked()
+
+    def set_autopilot(self, enabled: bool) -> SimulationSnapshot:
+        with self._lock:
+            self._autopilot_enabled = enabled
+            if enabled:
+                for booking_id in self._bookings:
+                    self._evaluate_booking(booking_id)
             return self._snapshot_locked()
 
     def _run(self, run_id: str, cancel: threading.Event) -> None:
@@ -257,6 +301,128 @@ class SimulationEngine:
                     },
                 )
             )
+            self._processed_planned_events += 1
+            self._refresh_score(booking.id, record_event=True)
+            self._evaluate_booking(booking.id)
+
+    def _refresh_score(self, booking_id: str, *, record_event: bool) -> None:
+        booking = self._bookings[booking_id]
+        lister = next(lister for lister in LISTERS if lister.id == booking.lister_id)
+        booking_events = [
+            event for event in self._events if event.booking_id == booking_id
+        ]
+        previous_score = self._scores.get(booking_id)
+        score = calculate_rescue_score(booking, booking_events, lister)
+        self._scores[booking_id] = score
+        self._bookings[booking_id] = booking.model_copy(
+            update={
+                "rescue_score": score.score,
+                "risk_level": score.risk_level.value,
+                "rescue_target": score.target,
+            }
+        )
+
+        if record_event and (
+            previous_score is None or previous_score.score != score.score
+        ):
+            self._events.append(
+                Event(
+                    id=f"event_{uuid4().hex[:12]}",
+                    booking_id=booking_id,
+                    event_type=EventType.RESCUE_SCORE_CHANGED,
+                    timestamp=datetime.now(timezone.utc),
+                    metadata={
+                        "previous_score": previous_score.score if previous_score else 0,
+                        "new_score": score.score,
+                        "raw_score": score.raw_score,
+                        "risk_level": score.risk_level.value,
+                        "target": score.target.value if score.target else None,
+                        "reasons": [
+                            reason.model_dump(mode="json") for reason in score.reasons
+                        ],
+                        "explanation": score.explanation,
+                    },
+                )
+            )
+
+    def _evaluate_booking(self, booking_id: str) -> None:
+        booking = self._bookings[booking_id]
+        score = self._scores[booking_id]
+        if score.target is RescueTarget.RENTER:
+            recipient = next(
+                renter for renter in RENTERS if renter.id == booking.renter_id
+            )
+            target_id = booking.renter_id
+        elif score.target is RescueTarget.LISTER:
+            recipient = next(
+                lister for lister in LISTERS if lister.id == booking.lister_id
+            )
+            target_id = booking.lister_id
+        else:
+            recipient = None
+            target_id = None
+
+        decision = evaluate_rescue_rules(
+            booking=booking,
+            score=score,
+            autopilot_enabled=self._autopilot_enabled,
+            target_id=target_id,
+            recipient_phone_available=bool(
+                recipient and getattr(recipient, "phone_demo_id", None)
+            ),
+            recipient_opted_out=bool(recipient and recipient.opted_out),
+            existing_actions=self._rescue_actions,
+        )
+        if decision.should_create_action:
+            action = RescueAction(
+                id=f"action_{uuid4().hex[:12]}",
+                booking_id=booking_id,
+                score_at_trigger=score.score,
+                intervention_type=score.recommended_intervention,
+                target_type=score.target,
+                target_id=target_id,
+                reason_summary=score.explanation,
+                status=RescueActionStatus.PENDING,
+            )
+            self._rescue_actions.append(action)
+            self._events.append(
+                Event(
+                    id=f"event_{uuid4().hex[:12]}",
+                    booking_id=booking_id,
+                    event_type=EventType.RESCUE_TRIGGERED,
+                    timestamp=datetime.now(timezone.utc),
+                    metadata={
+                        "action_id": action.id,
+                        "score": score.score,
+                        "target": score.target.value,
+                        "intervention": score.recommended_intervention.value,
+                        "explanation": score.explanation,
+                        "status": RescueActionStatus.PENDING.value,
+                    },
+                )
+            )
+            return
+
+        if (
+            decision.blocked_by is GuardrailCode.AUTOPILOT_OFF
+            and score.trigger_code
+        ):
+            held_key = (booking_id, score.trigger_code)
+            if held_key not in self._held_triggers:
+                self._held_triggers.add(held_key)
+                self._events.append(
+                    Event(
+                        id=f"event_{uuid4().hex[:12]}",
+                        booking_id=booking_id,
+                        event_type=EventType.AUTOPILOT_ACTION_HELD,
+                        timestamp=datetime.now(timezone.utc),
+                        metadata={
+                            "score": score.score,
+                            "intervention": score.recommended_intervention.value,
+                            "reason": decision.explanation,
+                        },
+                    )
+                )
 
     def _snapshot_locked(self) -> SimulationSnapshot:
         elapsed = self._elapsed_locked()
@@ -267,14 +433,18 @@ class SimulationEngine:
             status=self._status,
             duration_seconds=self.duration_seconds,
             speed_multiplier=self.speed_multiplier,
+            autopilot_enabled=self._autopilot_enabled,
             started_at=self._started_at,
             completed_at=self._completed_at,
             elapsed_seconds=round(elapsed, 3),
             progress_percent=round(progress, 1),
             total_planned_events=len(self._plan),
+            processed_planned_events=self._processed_planned_events,
             selected_journeys=self._journeys,
             bookings=tuple(self._bookings.values()),
             events=tuple(self._events),
+            scores=dict(self._scores),
+            rescue_actions=tuple(self._rescue_actions),
         )
 
     def _elapsed_locked(self) -> float:

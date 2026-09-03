@@ -6,7 +6,8 @@ from app.models.common import DomainModel, ValueRange
 class Renter(DomainModel):
     id: str
     name: str
-    phone_demo_id: str
+    phone_demo_id: str | None
+    opted_out: bool = False
     archetype: str
     intent_level: str
     responsiveness: str

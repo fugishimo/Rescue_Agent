@@ -26,9 +26,9 @@ uvicorn app.main:app --reload --port 8000
 The API is available at `http://localhost:8000`. Verify it directly at
 `http://localhost:8000/health`.
 
-## Inspect seeded marketplace data
+## Inspect backend APIs
 
-With the backend running, the Phase 2 data is available from:
+With the backend running, seeded data and live engine state are available from:
 
 - `GET /profiles` — six renters and five listers
 - `GET /listings` — seeded inventory tied to listers
@@ -39,6 +39,10 @@ With the backend running, the Phase 2 data is available from:
 - `POST /simulation/start` — start a randomized 90-second run
 - `POST /simulation/reset` — stop and clear the current run
 - `GET /dashboard` — polling-friendly simulation snapshot
+- `POST /autopilot` — enable or disable automatic rescue actions
+
+Phase 4 rescue actions remain `pending`; message generation and SMS delivery are
+implemented in later gated phases.
 
 Interactive API documentation is available at `http://localhost:8000/docs`.
 

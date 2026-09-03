@@ -15,6 +15,7 @@ from app.data.seed_data import (
 from app.models import Booking, Event, Listing
 from app.services.simulation import (
     SIMULATION_ENGINE,
+    AutopilotRequest,
     SimulationAlreadyRunningError,
     SimulationSnapshot,
     SimulationStartRequest,
@@ -116,3 +117,9 @@ async def start_simulation(
 async def reset_simulation() -> SimulationSnapshot:
     """Stop the current run and restore clean idle state."""
     return SIMULATION_ENGINE.reset()
+
+
+@app.post("/autopilot", response_model=SimulationSnapshot, tags=["simulation"])
+async def set_autopilot(request: AutopilotRequest) -> SimulationSnapshot:
+    """Enable or disable deterministic automatic rescue actions."""
+    return SIMULATION_ENGINE.set_autopilot(request.enabled)

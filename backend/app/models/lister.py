@@ -6,7 +6,8 @@ from app.models.common import DomainModel, ValueRange
 class Lister(DomainModel):
     id: str
     name: str
-    phone_demo_id: str
+    phone_demo_id: str | None
+    opted_out: bool = False
     archetype: str
     average_response_minutes: int = Field(gt=0)
     average_response_range: ValueRange[int]
