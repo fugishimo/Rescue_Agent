@@ -113,6 +113,18 @@ FastAPI owns all scoring, intervention, outcome, and analytics logic. The
 Next.js client is an operator view over that canonical state, so the dashboard
 and activity ledger cannot calculate conflicting results.
 
+## Production environment
+
+Set these deployment variables without committing their values to the repository:
+
+- Render backend: `FRONTEND_ORIGIN` set to the deployed Vercel origin
+- Render backend: `OPENAI_API_KEY` for model-generated wording
+- Vercel frontend: `NEXT_PUBLIC_API_URL` set to the deployed Render API origin
+
+The backend always permits `http://localhost:3000` for local development and
+adds `FRONTEND_ORIGIN` to its CORS allowlist when configured. The frontend falls
+back to `http://localhost:8000` when `NEXT_PUBLIC_API_URL` is absent.
+
 ## Run checks
 
 Backend:

@@ -24,8 +24,14 @@ from app.services.simulation import (
 
 
 def _cors_origins() -> list[str]:
-    configured_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000")
-    return [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
+    configured_origins = os.getenv("CORS_ORIGINS", "").split(",")
+    candidates = [
+        "http://localhost:3000",
+        *configured_origins,
+        os.getenv("FRONTEND_ORIGIN", ""),
+    ]
+    normalized = [origin.strip().rstrip("/") for origin in candidates if origin.strip()]
+    return list(dict.fromkeys(normalized))
 
 
 app = FastAPI(
