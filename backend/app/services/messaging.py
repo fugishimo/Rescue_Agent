@@ -7,7 +7,6 @@ from datetime import date
 from enum import StrEnum
 from typing import Protocol
 
-import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import (
@@ -21,12 +20,11 @@ from app.models import (
     Renter,
     RescueTarget,
 )
+from app.services.claude_client import ClaudeClient
 from app.services.rescue_scoring import RescueScore
 
 
 MAX_SMS_CHARACTERS = 240
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
-DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 SYSTEM_INSTRUCTIONS = """You write one booking-rescue SMS using only the supplied JSON facts.
 The deterministic rescue system has already selected the recipient and intervention; do not
@@ -51,6 +49,7 @@ _OUTPUT_SCHEMA = {
 
 class GenerationFailureCode(StrEnum):
     MISSING_API_KEY = "missing_api_key"
+    MISSING_MODEL = "missing_model"
     PROVIDER_ERROR = "provider_error"
     INVALID_OUTPUT = "invalid_output"
 
@@ -84,54 +83,34 @@ class MessageGenerator(Protocol):
     def generate(self, context: RescueMessageContext) -> str: ...
 
 
-class OpenAIResponsesMessageGenerator:
-    """Generate tightly structured copy through the OpenAI Responses API."""
+class ClaudeMessageGenerator:
+    """Generate tightly structured rescue copy through Claude."""
 
     def __init__(
         self,
         *,
         api_key: str,
-        model: str = DEFAULT_OPENAI_MODEL,
-        base_url: str = DEFAULT_OPENAI_BASE_URL,
+        model: str,
         timeout_seconds: float = 5,
+        client: ClaudeClient | None = None,
     ) -> None:
-        self.api_key = api_key
-        self.model = model
-        self.base_url = base_url.rstrip("/")
-        self.timeout_seconds = timeout_seconds
+        self.client = client or ClaudeClient(
+            api_key=api_key,
+            model=model,
+            timeout_seconds=timeout_seconds,
+        )
 
     def generate(self, context: RescueMessageContext) -> str:
-        response = httpx.post(
-            f"{self.base_url}/responses",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "instructions": SYSTEM_INSTRUCTIONS,
-                "input": context.model_dump_json(),
-                "text": {
-                    "format": {
-                        "type": "json_schema",
-                        "name": "rescue_sms",
-                        "strict": True,
-                        "schema": _OUTPUT_SCHEMA,
-                    }
-                },
-                "max_output_tokens": 120,
-                "store": False,
-            },
-            timeout=self.timeout_seconds,
+        output_text = self.client.generate_text(
+            system=SYSTEM_INSTRUCTIONS,
+            prompt=context.model_dump_json(),
+            output_schema=_OUTPUT_SCHEMA,
+            max_tokens=120,
         )
-        response.raise_for_status()
-        output_text = response.json().get("output_text")
-        if not isinstance(output_text, str):
-            raise ValueError("Responses API returned no output text")
         parsed = json.loads(output_text)
         message = parsed.get("message") if isinstance(parsed, dict) else None
         if not isinstance(message, str):
-            raise ValueError("Responses API returned no message")
+            raise ValueError("Claude returned no rescue message")
         return message
 
 
@@ -147,14 +126,16 @@ class MessagingService:
 
     @classmethod
     def from_environment(cls) -> "MessagingService":
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
         if not api_key:
             return cls()
+        model = os.getenv("ANTHROPIC_MODEL", "").strip()
+        if not model:
+            return cls(unavailable_code=GenerationFailureCode.MISSING_MODEL)
         return cls(
-            OpenAIResponsesMessageGenerator(
+            ClaudeMessageGenerator(
                 api_key=api_key,
-                model=os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
-                base_url=os.getenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL),
+                model=model,
             )
         )
 
@@ -171,7 +152,7 @@ class MessagingService:
             return _fallback_result(context, GenerationFailureCode.INVALID_OUTPUT)
         return MessageGenerationResult(
             message_text=validated,
-            message_source=MessageSource.OPENAI,
+            message_source=MessageSource.CLAUDE,
         )
 
 

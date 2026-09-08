@@ -1,4 +1,3 @@
-import json
 from datetime import date, datetime, timezone
 
 import pytest
@@ -16,10 +15,10 @@ from app.models import (
 )
 from app.services import messaging
 from app.services.messaging import (
+    ClaudeMessageGenerator,
     GenerationFailureCode,
     MAX_SMS_CHARACTERS,
     MessagingService,
-    OpenAIResponsesMessageGenerator,
     RescueMessageContext,
     build_rescue_message_context,
     fallback_message,
@@ -130,7 +129,7 @@ def test_structured_context_contains_only_approved_booking_facts() -> None:
     assert context.intervention_type is InterventionType.LISTER_REMINDER
 
 
-def test_valid_llm_copy_is_normalized_and_marked_openai() -> None:
+def test_valid_llm_copy_is_normalized_and_marked_claude() -> None:
     generator = StubGenerator(
         "  Hi Sarah — can you check the Williamsburg Loft request\n and confirm?  "
     )
@@ -139,7 +138,7 @@ def test_valid_llm_copy_is_normalized_and_marked_openai() -> None:
     result = MessagingService(generator).generate(context)
 
     assert generator.contexts == [context]
-    assert result.message_source is MessageSource.OPENAI
+    assert result.message_source is MessageSource.CLAUDE
     assert result.failure_code is None
     assert result.message_text == (
         "Hi Sarah — can you check the Williamsburg Loft request and confirm?"
@@ -189,31 +188,43 @@ def test_each_intervention_has_a_valid_deterministic_template(
     assert validate_message(message, context) == message
 
 
-def test_openai_generator_uses_responses_structured_output(monkeypatch) -> None:
+def test_claude_generator_uses_structured_output() -> None:
     captured: dict[str, object] = {}
 
-    class FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
+    class FakeClaudeClient:
+        def generate_text(self, **kwargs) -> str:
+            captured.update(kwargs)
+            return '{"message": "Can you confirm?"}'
 
-        def json(self) -> dict[str, str]:
-            return {"output_text": json.dumps({"message": "Can you confirm?"})}
-
-    def fake_post(url: str, **kwargs):
-        captured["url"] = url
-        captured.update(kwargs)
-        return FakeResponse()
-
-    monkeypatch.setattr(messaging.httpx, "post", fake_post)
     context = make_context()
-    generator = OpenAIResponsesMessageGenerator(
+    generator = ClaudeMessageGenerator(
         api_key="test-key",
-        model="gpt-4o-mini",
+        model="claude-test-model",
+        client=FakeClaudeClient(),
     )
 
     assert generator.generate(context) == "Can you confirm?"
-    assert captured["url"] == "https://api.openai.com/v1/responses"
-    payload = captured["json"]
-    assert payload["input"] == context.model_dump_json()
-    assert payload["text"]["format"]["type"] == "json_schema"
-    assert payload["text"]["format"]["strict"] is True
+    assert captured["prompt"] == context.model_dump_json()
+    assert captured["system"] == messaging.SYSTEM_INSTRUCTIONS
+    assert captured["output_schema"]["additionalProperties"] is False
+    assert captured["max_tokens"] == 120
+
+
+def test_environment_requires_anthropic_key_and_model(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "ignored-openai-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+
+    missing_key = MessagingService.from_environment()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    missing_model = MessagingService.from_environment()
+
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-test-model")
+    configured = MessagingService.from_environment()
+
+    assert missing_key.generator is None
+    assert missing_key.unavailable_code is GenerationFailureCode.MISSING_API_KEY
+    assert missing_model.generator is None
+    assert missing_model.unavailable_code is GenerationFailureCode.MISSING_MODEL
+    assert isinstance(configured.generator, ClaudeMessageGenerator)

@@ -74,7 +74,7 @@ export interface RescueAction {
   target_id: string;
   reason_summary: string;
   message_text: string | null;
-  message_source: "openai" | "fallback_template" | null;
+  message_source: "claude" | "fallback_template" | null;
   status: string;
   score_at_trigger: number;
   sent_at: string | null;

@@ -3,6 +3,11 @@ import os
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import load_backend_environment
+
+
+load_backend_environment()
+
 from app.data.seed_data import (
     BOOKINGS,
     EVENTS,

@@ -24,7 +24,7 @@ class RescueActionStatus(StrEnum):
 
 
 class MessageSource(StrEnum):
-    OPENAI = "openai"
+    CLAUDE = "claude"
     FALLBACK_TEMPLATE = "fallback_template"
 
 

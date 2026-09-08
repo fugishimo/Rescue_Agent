@@ -34,9 +34,17 @@ The API is available at `http://localhost:8000`. Verify it directly at
 
 The demo works without credentials by using intervention-specific fallback
 messages. To enable model-generated rescue wording, create a private
-`backend/.env`, add `OPENAI_API_KEY`, and start Uvicorn with `--env-file .env`.
-The default model is `gpt-4o-mini` and can be changed with `OPENAI_MODEL`. The
-environment file is ignored by Git.
+`backend/.env` and add `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`. The backend
+loads that file automatically at startup; it never loads `.env.example`.
+Existing environment variables take precedence, preserving Render deployment
+behavior. Both settings stay on the backend, and the environment file is
+ignored by Git. `ANTHROPIC_MODEL` must be a Claude model ID available to the
+configured Anthropic account.
+
+```dotenv
+ANTHROPIC_API_KEY=your_anthropic_api_key
+ANTHROPIC_MODEL=your_claude_model_id
+```
 
 ## Inspect backend APIs
 
@@ -55,7 +63,7 @@ With the backend running, seeded data and live engine state are available from:
 - `POST /autopilot` — enable or disable automatic rescue actions
 
 Qualifying rescue actions contain validated SMS wording and record whether it
-came from OpenAI or a fallback template. The demo then records a simulated send,
+came from Claude or a fallback template. The demo then records a simulated send,
 uses the selected profile to produce a reply or no-response outcome, and updates
 the booking. No real SMS provider is connected and no message leaves the app.
 
@@ -104,7 +112,7 @@ Next.js dashboard + activity ledger
 FastAPI simulation engine
   ├─ seeded renter/lister profiles
   ├─ deterministic rescue scoring and guardrails
-  ├─ constrained OpenAI message generation with safe fallback
+  ├─ constrained Claude message generation with safe fallback
   ├─ simulated SMS delivery and profile-driven response outcomes
   └─ shared audit and duplicate-safe GMV analytics
 ```
@@ -118,7 +126,8 @@ and activity ledger cannot calculate conflicting results.
 Set these deployment variables without committing their values to the repository:
 
 - Render backend: `FRONTEND_ORIGIN` set to the deployed Vercel origin
-- Render backend: `OPENAI_API_KEY` for model-generated wording
+- Render backend: `ANTHROPIC_API_KEY` for model-generated wording
+- Render backend: `ANTHROPIC_MODEL` set to an available Claude model ID
 - Vercel frontend: `NEXT_PUBLIC_API_URL` set to the deployed Render API origin
 
 The backend always permits `http://localhost:3000` for local development and
@@ -150,5 +159,5 @@ backend/   FastAPI application and backend tests
 frontend/  Next.js App Router application
 ```
 
-Product requirements and simulation behavior are defined in `PRD.md` and
-`SIMULATION_PROFILES.md`.
+Product requirements and simulation behavior are defined in `PRD.md`,
+`SIMULATION_PROFILES.md`, and `RESCUE_CLAUDE_V2_PRD.md`.
