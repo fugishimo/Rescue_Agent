@@ -12,9 +12,7 @@ from app.models import (
     AIAgentLog,
     InterventionType,
 )
-
-
-HIGH_VALUE_THRESHOLD = 4_000
+from app.services.attention import is_high_value
 
 
 class AIToolError(RuntimeError):
@@ -78,6 +76,8 @@ class AIToolBackend(Protocol):
     def snapshot(self) -> Any: ...
 
     def ai_logs(self) -> tuple[AIAgentLog, ...]: ...
+
+    def attention_cases(self) -> tuple[Any, ...]: ...
 
     def record_ai_log(
         self,
@@ -264,7 +264,7 @@ class AIToolDispatcher:
         return [
             _booking_payload(snapshot, booking.id)
             for booking in snapshot.bookings
-            if booking.booking_value >= HIGH_VALUE_THRESHOLD
+            if is_high_value(booking)
         ]
 
     def _lister_performance(self, _: _StrictArguments) -> list[dict[str, object]]:
@@ -311,8 +311,10 @@ class AIToolDispatcher:
             ],
         }
 
-    def _attention_cases(self, _: _StrictArguments) -> list[object]:
-        return []
+    def _attention_cases(self, _: _StrictArguments) -> list[dict[str, object]]:
+        return [
+            case.model_dump(mode="json") for case in self.backend.attention_cases()
+        ]
 
     def _send_rescue_sms(self, arguments: _StrictArguments) -> dict[str, object]:
         action = self.backend.send_ai_rescue_sms(

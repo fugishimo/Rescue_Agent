@@ -209,6 +209,7 @@ def test_randomized_runs_preserve_the_demo_story_constraints(seed: int) -> None:
     engine.start(seed=seed)
     completed = wait_for_completion(engine)
     actions = completed.rescue_actions
+    attention_cases = engine.attention_cases()
     healthy_booking_id = next(
         journey.booking_id
         for journey in completed.selected_journeys
@@ -226,15 +227,22 @@ def test_randomized_runs_preserve_the_demo_story_constraints(seed: int) -> None:
     assert len(completed.selected_journeys) == 3
     assert actions
     assert all(action.status is RescueActionStatus.SENT for action in actions)
-    assert any(action.outcome is RescueOutcome.RESCUED for action in actions)
+    if attention_cases:
+        assert any(
+            action.outcome is RescueOutcome.STILL_AT_RISK for action in actions
+        )
+        assert all(case.high_value for case in attention_cases)
+    else:
+        assert any(action.outcome is RescueOutcome.RESCUED for action in actions)
     assert any(
         booking.status in {BookingStatus.AT_RISK, BookingStatus.LOST}
         for booking in completed.bookings
     )
     assert all(action.booking_id != healthy_booking_id for action in actions)
     assert max(score_changes_by_booking.values()) >= 2
-    assert completed.analytics.run_bookings_rescued == 1
-    assert completed.analytics.run_gmv_rescued > 0
+    assert completed.analytics.run_bookings_rescued == (0 if attention_cases else 1)
+    if not attention_cases:
+        assert completed.analytics.run_gmv_rescued > 0
 
 
 def test_duplicate_start_is_rejected_and_reset_allows_clean_second_run() -> None:

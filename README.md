@@ -63,6 +63,9 @@ With the backend running, seeded data and live engine state are available from:
 - `GET /dashboard` — polling-friendly simulation snapshot
 - `GET /activity` — rescue audit records and coherent monthly impact metrics
 - `GET /ops/ai-log` — newest-first AI tool and operational audit entries
+- `GET /ops/attention` — active human-review cases
+- `POST /ops/attention/{id}/approve` — validate and send an approved AI follow-up
+- `POST /ops/attention/{id}/human-rescue` — transfer a case to human ownership
 - `POST /autopilot` — enable or disable automatic rescue actions
 
 Qualifying rescue actions contain validated SMS wording and record whether it
@@ -94,6 +97,13 @@ message, simulated response, resulting booking state, and any rescued GMV. The
 dashboard and activity page use the same duplicate-safe monthly analytics. A
 second AI Agent Log on the page records approved tool calls, denied requests,
 and concise operational reasons without exposing hidden reasoning.
+
+Bookings valued at $4,000 or more use a server-enforced review gate. Their first
+eligible rescue SMS can still send automatically, but any follow-up is drafted
+for review and cannot send until an operator selects **Approve AI**. Selecting
+**Human Rescue** blocks all further AI sends for that booking. When follow-up
+generation is unavailable, the case is escalated without sending a fallback
+follow-up.
 
 ## Demo walkthrough
 

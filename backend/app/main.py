@@ -17,10 +17,12 @@ from app.data.seed_data import (
     MarketplaceSeed,
     ProfileCatalog,
 )
-from app.models import Booking, AIAgentLog, Event, Listing
+from app.models import AIAgentLog, AttentionCase, Booking, Event, Listing
 from app.services.analytics import ActivityResponse, build_activity_response
 from app.services.simulation import (
     SIMULATION_ENGINE,
+    AttentionActionDeniedError,
+    AttentionCaseNotFoundError,
     AutopilotRequest,
     SimulationAlreadyRunningError,
     SimulationSnapshot,
@@ -123,6 +125,58 @@ async def activity_state() -> ActivityResponse:
 async def ai_agent_log() -> tuple[AIAgentLog, ...]:
     """Return newest-first operational AI actions without hidden reasoning."""
     return SIMULATION_ENGINE.ai_logs()
+
+
+@app.get(
+    "/ops/attention",
+    response_model=tuple[AttentionCase, ...],
+    tags=["ai-ops"],
+)
+async def attention_cases() -> tuple[AttentionCase, ...]:
+    """Return newest-first cases requiring AI approval or human handling."""
+    return SIMULATION_ENGINE.attention_cases()
+
+
+@app.post(
+    "/ops/attention/{case_id}/approve",
+    response_model=AttentionCase,
+    tags=["ai-ops"],
+)
+async def approve_attention_case(case_id: str) -> AttentionCase:
+    """Revalidate and send one human-approved high-value AI follow-up."""
+    try:
+        return SIMULATION_ENGINE.approve_attention_case(case_id)
+    except AttentionCaseNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+    except AttentionActionDeniedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+
+
+@app.post(
+    "/ops/attention/{case_id}/human-rescue",
+    response_model=AttentionCase,
+    tags=["ai-ops"],
+)
+async def human_rescue_attention_case(case_id: str) -> AttentionCase:
+    """Transfer an active attention case to human ownership."""
+    try:
+        return SIMULATION_ENGINE.human_rescue_attention_case(case_id)
+    except AttentionCaseNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+    except AttentionActionDeniedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
 
 
 @app.post(

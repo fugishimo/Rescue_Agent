@@ -1,4 +1,5 @@
 from app.models.booking import Booking, BookingStatus, RescueTarget
+from app.models.attention_case import AttentionCase, AttentionStatus, HumanDecision
 from app.models.ai_agent_log import AIActionType, AIAgentLog
 from app.models.event import Event, EventType
 from app.models.lister import Lister
@@ -14,6 +15,8 @@ from app.models.rescue_action import (
 
 __all__ = [
     "AvailabilityStatus",
+    "AttentionCase",
+    "AttentionStatus",
     "Booking",
     "BookingStatus",
     "AIActionType",
@@ -21,6 +24,7 @@ __all__ = [
     "Event",
     "EventType",
     "InterventionType",
+    "HumanDecision",
     "Lister",
     "Listing",
     "Market",
