@@ -26,6 +26,10 @@ from app.models import (
     Lister,
     Listing,
     MessageSource,
+    OpsBrief,
+    OpsBriefResponse,
+    PriorityAlert,
+    PriorityAlertType,
     Renter,
     RescueAction,
     RescueActionStatus,
@@ -46,6 +50,7 @@ from app.services.messaging import (
     build_rescue_message_context,
     validate_message,
 )
+from app.services.ops_brief import build_ops_brief
 from app.services.rescue_rules import (
     GuardrailCode,
     RescueRuleDecision,
@@ -221,6 +226,9 @@ class SimulationEngine:
         self._rescue_actions: list[RescueAction] = []
         self._ai_logs: list[AIAgentLog] = []
         self._attention_cases: list[AttentionCase] = []
+        self._ops_brief: OpsBrief | None = None
+        self._priority_alerts: list[PriorityAlert] = []
+        self._priority_alert_keys: set[tuple[PriorityAlertType, str]] = set()
         self._human_owned_booking_ids: set[str] = set()
         self._held_triggers: set[tuple[str, str]] = set()
         self._ai_tools = AIToolDispatcher(self)
@@ -256,6 +264,9 @@ class SimulationEngine:
             self._rescue_actions = []
             self._ai_logs = []
             self._attention_cases = []
+            self._ops_brief = None
+            self._priority_alerts = []
+            self._priority_alert_keys = set()
             self._human_owned_booking_ids = set()
             self._held_triggers = set()
             for booking_id in self._bookings:
@@ -300,6 +311,9 @@ class SimulationEngine:
             self._rescue_actions = []
             self._ai_logs = []
             self._attention_cases = []
+            self._ops_brief = None
+            self._priority_alerts = []
+            self._priority_alert_keys = set()
             self._human_owned_booking_ids = set()
             self._held_triggers = set()
             return self._snapshot_locked()
@@ -340,6 +354,15 @@ class SimulationEngine:
                     key=lambda booking: booking.booking_value,
                     reverse=True,
                 )
+            )
+
+    def ops_brief_state(self) -> OpsBriefResponse:
+        with self._lock:
+            return OpsBriefResponse(
+                run_id=self._run_id,
+                run_status=self._status.value,
+                brief=self._ops_brief,
+                priority_alerts=tuple(reversed(self._priority_alerts)),
             )
 
     def approve_attention_case(self, case_id: str) -> AttentionCase:
@@ -702,6 +725,25 @@ class SimulationEngine:
             if self._run_id == run_id and self._status is SimulationStatus.RUNNING:
                 self._status = SimulationStatus.COMPLETED
                 self._completed_at = datetime.now(timezone.utc)
+                active_attention_cases = tuple(
+                    case
+                    for case in self._attention_cases
+                    if case.status is not AttentionStatus.RESOLVED
+                )
+                self._ops_brief = build_ops_brief(
+                    run_id=run_id,
+                    generated_at=self._completed_at,
+                    journeys_monitored=len(self._journeys),
+                    bookings=tuple(self._bookings.values()),
+                    rescue_actions=tuple(self._rescue_actions),
+                    active_attention_cases=active_attention_cases,
+                )
+                self.record_ai_log(
+                    action_type=AIActionType.OPS_BRIEF_GENERATED,
+                    reason_summary="Generated the final run brief from backend-owned metrics.",
+                    result="generated",
+                    metadata={"run_id": run_id},
+                )
 
     def _apply_event(self, run_id: str, planned_event: _PlannedEvent) -> None:
         with self._lock:
@@ -771,6 +813,16 @@ class SimulationEngine:
                 "rescue_target": score.target,
             }
         )
+        if is_high_value(self._bookings[booking_id]) and score.score >= 70:
+            risk_label = "critical" if score.score >= 85 else "high"
+            self._record_priority_alert(
+                booking=self._bookings[booking_id],
+                alert_type=PriorityAlertType.HIGH_VALUE_RISK,
+                message=(
+                    f"${booking.booking_value:,} high-value booking entered "
+                    f"{risk_label} risk."
+                ),
+            )
 
         if record_event and (
             previous_score is None or previous_score.score != score.score
@@ -980,6 +1032,15 @@ class SimulationEngine:
                 "attention_case_id": case.id,
                 "booking_value": booking.booking_value,
             },
+        )
+        self._record_priority_alert(
+            booking=booking,
+            alert_type=PriorityAlertType.HUMAN_REVIEW_REQUIRED,
+            message=(
+                "High-value recipient replied — approval required."
+                if plan.should_respond
+                else "High-value follow-up requires operator review."
+            ),
         )
         if drafted_response:
             self.record_ai_log(
@@ -1276,6 +1337,13 @@ class SimulationEngine:
                 ),
                 metadata={"action_id": action.id},
             )
+            booking = self._bookings[action.booking_id]
+            if is_high_value(booking):
+                self._record_priority_alert(
+                    booking=booking,
+                    alert_type=PriorityAlertType.HIGH_VALUE_OUTREACH,
+                    message="First automated outreach sent for high-value booking.",
+                )
 
         if cancel.wait(self._scaled_delay(2.5)):
             return
@@ -1405,6 +1473,30 @@ class SimulationEngine:
                     },
                 )
             )
+
+    def _record_priority_alert(
+        self,
+        *,
+        booking: Booking,
+        alert_type: PriorityAlertType,
+        message: str,
+    ) -> None:
+        if self._run_id is None or self._status is not SimulationStatus.RUNNING:
+            return
+        alert_key = (alert_type, booking.id)
+        if alert_key in self._priority_alert_keys:
+            return
+        self._priority_alert_keys.add(alert_key)
+        self._priority_alerts.append(
+            PriorityAlert(
+                id=f"priority_alert_{uuid4().hex[:12]}",
+                run_id=self._run_id,
+                timestamp=datetime.now(timezone.utc),
+                booking_id=booking.id,
+                alert_type=alert_type,
+                message=message,
+            )
+        )
 
     def _action_index(self, run_id: str | None, action_id: str) -> int | None:
         if self._run_id != run_id or self._status is not SimulationStatus.RUNNING:

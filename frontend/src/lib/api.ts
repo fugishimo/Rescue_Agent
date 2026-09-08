@@ -4,6 +4,7 @@ import type {
   AttentionCase,
   Booking,
   MarketplaceSeed,
+  OpsBriefResponse,
   SimulationSnapshot,
 } from "./types";
 
@@ -52,6 +53,10 @@ export function getAttentionCases() {
 
 export function getHighValueBookings() {
   return request<Booking[]>("/ops/high-value", { cache: "no-store" });
+}
+
+export function getOpsBrief() {
+  return request<OpsBriefResponse>("/ops/brief", { cache: "no-store" });
 }
 
 export function approveAIFollowUp(caseId: string) {

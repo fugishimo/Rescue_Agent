@@ -190,6 +190,37 @@ export interface AttentionCase {
   resolved_at: string | null;
 }
 
+export interface PriorityAlert {
+  id: string;
+  run_id: string;
+  timestamp: string;
+  booking_id: string;
+  alert_type: "high_value_risk" | "high_value_outreach" | "human_review_required";
+  priority: string;
+  message: string;
+}
+
+export interface OpsBrief {
+  run_id: string;
+  generated_at: string;
+  journeys_monitored: number;
+  interventions_sent: number;
+  bookings_rescued: number;
+  gmv_rescued: number;
+  high_value_cases: number;
+  unresolved_cases: number;
+  needs_attention_count: number;
+  attention_case_ids: string[];
+  summary: string;
+}
+
+export interface OpsBriefResponse {
+  run_id: string | null;
+  run_status: string;
+  brief: OpsBrief | null;
+  priority_alerts: PriorityAlert[];
+}
+
 export interface MarketplaceSeed {
   reference_time: string;
   renters: Renter[];

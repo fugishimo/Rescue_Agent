@@ -17,7 +17,14 @@ from app.data.seed_data import (
     MarketplaceSeed,
     ProfileCatalog,
 )
-from app.models import AIAgentLog, AttentionCase, Booking, Event, Listing
+from app.models import (
+    AIAgentLog,
+    AttentionCase,
+    Booking,
+    Event,
+    Listing,
+    OpsBriefResponse,
+)
 from app.services.analytics import ActivityResponse, build_activity_response
 from app.services.simulation import (
     SIMULATION_ENGINE,
@@ -115,6 +122,16 @@ async def activity_state() -> ActivityResponse:
     return build_activity_response(
         list(snapshot.bookings), list(snapshot.events), list(snapshot.rescue_actions)
     )
+
+
+@app.get(
+    "/ops/brief",
+    response_model=OpsBriefResponse,
+    tags=["ai-ops"],
+)
+async def ops_brief() -> OpsBriefResponse:
+    """Return priority live alerts and the final completed-run brief."""
+    return SIMULATION_ENGINE.ops_brief_state()
 
 
 @app.get(

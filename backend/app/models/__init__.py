@@ -4,6 +4,12 @@ from app.models.ai_agent_log import AIActionType, AIAgentLog
 from app.models.event import Event, EventType
 from app.models.lister import Lister
 from app.models.listing import AvailabilityStatus, Listing, Market
+from app.models.ops_brief import (
+    OpsBrief,
+    OpsBriefResponse,
+    PriorityAlert,
+    PriorityAlertType,
+)
 from app.models.renter import Renter
 from app.models.rescue_action import (
     InterventionType,
@@ -29,6 +35,10 @@ __all__ = [
     "Listing",
     "Market",
     "MessageSource",
+    "OpsBrief",
+    "OpsBriefResponse",
+    "PriorityAlert",
+    "PriorityAlertType",
     "Renter",
     "RescueAction",
     "RescueActionStatus",

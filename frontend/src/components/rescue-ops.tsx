@@ -10,6 +10,7 @@ import {
   getDashboard,
   getHighValueBookings,
   getMarketplaceSeed,
+  getOpsBrief,
   selectHumanRescue,
 } from "@/lib/api";
 import type {
@@ -17,6 +18,7 @@ import type {
   AttentionCase,
   Booking,
   MarketplaceSeed,
+  OpsBriefResponse,
   RescueAction,
   SimulationSnapshot,
 } from "@/lib/types";
@@ -51,24 +53,27 @@ export function RescueOps() {
   const [attention, setAttention] = useState<AttentionCase[]>([]);
   const [agentLog, setAgentLog] = useState<AIAgentLog[]>([]);
   const [highValue, setHighValue] = useState<Booking[]>([]);
+  const [opsBrief, setOpsBrief] = useState<OpsBriefResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingCaseId, setPendingCaseId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [marketplace, dashboard, cases, logs, highValueBookings] = await Promise.all([
+      const [marketplace, dashboard, cases, logs, highValueBookings, brief] = await Promise.all([
         getMarketplaceSeed(),
         getDashboard(),
         getAttentionCases(),
         getAIAgentLog(),
         getHighValueBookings(),
+        getOpsBrief(),
       ]);
       setSeed(marketplace);
       setSnapshot(dashboard);
       setAttention(cases);
       setAgentLog(logs);
       setHighValue(highValueBookings);
+      setOpsBrief(brief);
       setError(null);
     } catch {
       setError("The Rescue Agent operations API is unavailable.");
@@ -121,20 +126,25 @@ export function RescueOps() {
     }
   }
 
-  const sentCount = actions.filter((action) => action.status === "sent").length;
-  const rescuedCount = snapshot?.analytics.run_bookings_rescued ?? 0;
-  const runGmv = snapshot?.analytics.run_gmv_rescued ?? 0;
-  const journeys = snapshot?.selected_journeys.length ?? 0;
-  const unresolved = (snapshot?.bookings ?? []).filter((booking) =>
+  const finalBrief = opsBrief?.brief;
+  const sentCount = finalBrief?.interventions_sent
+    ?? actions.filter((action) => action.status === "sent").length;
+  const rescuedCount = finalBrief?.bookings_rescued
+    ?? snapshot?.analytics.run_bookings_rescued
+    ?? 0;
+  const runGmv = finalBrief?.gmv_rescued ?? snapshot?.analytics.run_gmv_rescued ?? 0;
+  const journeys = finalBrief?.journeys_monitored ?? snapshot?.selected_journeys.length ?? 0;
+  const unresolved = finalBrief?.unresolved_cases ?? (snapshot?.bookings ?? []).filter((booking) =>
     ["at_risk", "payment_issue", "awaiting_lister", "awaiting_availability"].includes(
       booking.status,
     )
   ).length;
-  const runSummary = snapshot?.status === "completed"
-    ? `Run complete. ${sentCount} interventions were sent; ${attention.length} cases still need operator attention.`
-    : snapshot?.status === "running"
+  const highValueCount = finalBrief?.high_value_cases ?? highValue.length;
+  const attentionCount = finalBrief?.needs_attention_count ?? attention.length;
+  const runSummary = finalBrief?.summary
+    ?? (snapshot?.status === "running"
       ? `Monitoring ${journeys} live booking journeys with ${attention.length} cases requiring attention.`
-      : "The operations console is ready. Start a live simulation to generate a marketplace brief.";
+      : "The operations console is ready. Start a live simulation to generate a marketplace brief.");
 
   return (
     <main className={styles.shell}>
@@ -253,17 +263,34 @@ export function RescueOps() {
       </section>
 
       <section className={styles.section} aria-labelledby="brief-title">
-        <SectionHeading id="brief-title" eyebrow="CURRENT RUN" title="Rescue Agent Ops Brief" detail={words(snapshot?.status ?? "idle")} />
+        <SectionHeading
+          id="brief-title"
+          eyebrow="CURRENT RUN"
+          title="Rescue Agent Ops Brief"
+          detail={finalBrief ? "Final brief" : words(opsBrief?.run_status ?? snapshot?.status ?? "idle")}
+        />
         <div className={styles.briefPanel}>
+          {opsBrief?.priority_alerts.length ? (
+            <div className={styles.priorityAlerts} aria-label="Priority live alerts">
+              <p>PRIORITY UPDATES</p>
+              {opsBrief.priority_alerts.map((alert) => (
+                <div key={alert.id}>
+                  <time dateTime={alert.timestamp}>{shortTime(alert.timestamp)}</time>
+                  <strong>{alert.message}</strong>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className={styles.briefMetrics}>
             <BriefMetric label="Journeys monitored" value={String(journeys)} />
             <BriefMetric label="Interventions sent" value={String(sentCount)} />
             <BriefMetric label="Bookings rescued" value={String(rescuedCount)} />
             <BriefMetric label="GMV rescued" value={money.format(runGmv)} />
-            <BriefMetric label="High-value cases" value={String(highValue.length)} />
+            <BriefMetric label="High-value cases" value={String(highValueCount)} />
             <BriefMetric label="Unresolved" value={String(unresolved)} />
+            <BriefMetric label="Needs attention" value={String(attentionCount)} />
           </div>
-          <p className={styles.summary}>{runSummary}</p>
+          <p className={styles.summary} data-final={Boolean(finalBrief)}>{runSummary}</p>
         </div>
       </section>
 

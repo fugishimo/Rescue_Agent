@@ -62,6 +62,7 @@ With the backend running, seeded data and live engine state are available from:
 - `POST /simulation/reset` — stop and clear the current run
 - `GET /dashboard` — polling-friendly simulation snapshot
 - `GET /activity` — rescue audit records and coherent monthly impact metrics
+- `GET /ops/brief` — urgent high-value updates and the completed-run Ops Brief
 - `GET /ops/ai-log` — newest-first AI tool and operational audit entries
 - `GET /ops/attention` — active human-review cases
 - `GET /ops/high-value` — current bookings at or above the $4,000 policy boundary
