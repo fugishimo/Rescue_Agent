@@ -74,7 +74,7 @@ export interface RescueAction {
   target_id: string;
   reason_summary: string;
   message_text: string | null;
-  message_source: "claude" | "fallback_template" | null;
+  message_source: "openai" | "fallback_template" | null;
   status: string;
   score_at_trigger: number;
   sent_at: string | null;
@@ -151,6 +151,18 @@ export interface ActivityRecord {
 export interface ActivityResponse {
   analytics: RescueAnalytics;
   records: ActivityRecord[];
+}
+
+export interface AIAgentLog {
+  id: string;
+  timestamp: string;
+  booking_id: string | null;
+  action_type: string;
+  reason_summary: string;
+  tool_name: string | null;
+  tool_arguments_summary: string | null;
+  result: string;
+  metadata: Record<string, unknown>;
 }
 
 export interface MarketplaceSeed {

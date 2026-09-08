@@ -156,7 +156,7 @@ function SmsDemoPanel({
           </div>
           <div className={styles.smsOutcome} data-outcome={action.outcome}>
             <span>{outcomeLabel}</span>
-            <small>{action.message_source === "claude" ? "Claude-generated copy" : "Guardrailed fallback copy"}</small>
+            <small>{action.message_source === "openai" ? "AI-generated copy" : "Guardrailed fallback copy"}</small>
           </div>
         </div>
       ) : (

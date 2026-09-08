@@ -1,19 +1,19 @@
-# Rescue Snag Bookings — V2 PRD: Claude Ops Copilot
+# Rescue Snag Bookings — V2 PRD: Rescue Agent Ops Copilot
 
 ## 0. Purpose
 This document modifies the existing Rescue Snag Bookings application. Do not rebuild V1. Preserve the existing Next.js + TypeScript frontend, FastAPI + Python backend, randomized 90-second simulation, deterministic rescue scoring, Autopilot, simulated SMS, activity ledger, GMV metrics, Vercel deployment, and Render deployment unless this V2 PRD explicitly changes behavior.
 
-V2 goal: turn Claude into a constrained marketplace operations copilot that can inspect the full simulated marketplace, select from approved rescue interventions, generate/send SMS, summarize operations, surface high-value cases, escalate exceptions, and take approved actions from an operations-only chat.
+V2 goal: turn Rescue Agent into a constrained marketplace operations copilot that can inspect the full simulated marketplace, select from approved rescue interventions, generate/send SMS, summarize operations, surface high-value cases, escalate exceptions, and take approved actions from an operations-only chat.
 
 Core principle:
 
-**Rules define authority. Claude operates inside those rules.**
+**Rules define authority. Rescue Agent operates inside those rules.**
 
 ---
 
 ## 1. Product behavior
 
-Claude may:
+Rescue Agent may:
 - inspect whole-marketplace state;
 - review rescue-eligible bookings;
 - select among backend-approved intervention types;
@@ -26,7 +26,7 @@ Claude may:
 - answer marketplace-operations questions;
 - take approved actions through tool calls.
 
-Claude may not:
+Rescue Agent may not:
 - change rescue scores or scoring thresholds;
 - change booking value;
 - mark bookings rescued/completed/lost;
@@ -38,18 +38,18 @@ Backend remains source of truth.
 
 Execution pattern:
 
-Marketplace state → deterministic rescue score/policy → allowed action set → Claude → backend tool request → server-side revalidation → execute/deny → audit log.
+Marketplace state → deterministic rescue score/policy → allowed action set → Rescue Agent → backend tool request → server-side revalidation → execute/deny → audit log.
 
 ---
 
 ## 2. Branding and navigation
 
-Visible branding: **Rescue Agent · Powered by Claude**.
+Visible branding: **Rescue Agent**. Do not expose provider branding in prominent product UI.
 
 Primary routes:
 - `/dashboard` — Live Console
 - `/activity` — Activity Ledger
-- `/ops` — Claude Ops Brief
+- `/ops` — Rescue Agent Ops Brief
 
 Add an **Ops Brief** button beside the existing Activity button on the dashboard.
 
@@ -61,50 +61,50 @@ High-value means **booking value >= $4,000**.
 
 ### First outbound message
 For all eligible bookings, including high-value:
-- Claude may auto-send the first rescue SMS if Autopilot is ON and all backend guardrails pass.
+- Rescue Agent may auto-send the first rescue SMS if Autopilot is ON and all backend guardrails pass.
 
 ### Normal-value bookings (< $4,000)
-- Claude may continue approved follow-up messaging autonomously.
+- Rescue Agent may continue approved follow-up messaging autonomously.
 - Every send must pass backend guardrails.
-- Safety cap for V2 MVP: maximum 2 Claude-authored outbound rescue messages per booking unless the operator explicitly acts from the Ops interface.
+- Safety cap for V2 MVP: maximum 2 AI-authored outbound rescue messages per booking unless the operator explicitly acts from the Ops interface.
 
 ### High-value bookings (>= $4,000)
 - first outbound rescue SMS may auto-send;
 - every subsequent outbound response/action requires human approval;
-- Claude must pre-draft the next response;
+- Rescue Agent must pre-draft the next response;
 - case appears in **Needs Immediate Attention**;
-- Claude cannot send the follow-up until the human chooses **Approve Claude**;
-- choosing **Human Rescue** transfers ownership to the operator and stops autonomous Claude messaging for that case.
+- Rescue Agent cannot send the follow-up until the human chooses **Approve AI**;
+- choosing **Human Rescue** transfers ownership to the operator and stops autonomous Rescue Agent messaging for that case.
 
-No Close/Ignore action exists. Attention issues remain active until resolved by marketplace state or human/Claude action.
+No Close/Ignore action exists. Attention issues remain active until resolved by marketplace state or human/Rescue Agent action.
 
 ---
 
 ## 4. Exception escalation
 
-Claude may escalate before the first SMS if:
+Rescue Agent may escalate before the first SMS if:
 - required context is missing;
 - marketplace data conflicts;
 - case does not fit an approved intervention type;
 - action would violate messaging policy;
 - booking state is ambiguous;
 - recipient explicitly asks for a human;
-- Claude cannot determine a safe approved action;
+- Rescue Agent cannot determine a safe approved action;
 - repeated model/tool failure prevents safe automation.
 
 These cases also appear in **Needs Immediate Attention**.
 
 ---
 
-## 5. Claude Ops Brief page
+## 5. Rescue Agent Ops Brief page
 
 Route: `/ops`
 
 Page hierarchy:
 
 1. **Needs Immediate Attention**
-2. **Claude Ops Brief**
-3. **What Claude Handled**
+2. **Rescue Agent Ops Brief**
+3. **What Rescue Agent Handled**
 4. **High-Value Watch**
 5. **Ask Rescue Agent**
 
@@ -122,25 +122,25 @@ Each card shows:
 - escalation reason;
 - first automated SMS;
 - latest reply if present;
-- Claude’s drafted next response/action;
-- concise Claude recommendation.
+- Rescue Agent’s drafted next response/action;
+- concise AI recommendation.
 
 Buttons:
-- **Approve Claude**
+- **Approve AI**
 - **Human Rescue**
 
-Approve Claude:
+Approve AI:
 - server re-validates policy;
 - sends the drafted response;
 - logs human approval.
 
 Human Rescue:
 - marks case human-owned;
-- blocks further autonomous Claude sends;
+- blocks further autonomous Rescue Agent sends;
 - keeps case active;
 - optionally provides a human message field.
 
-### 5.2 Claude Ops Brief
+### 5.2 Rescue Agent Ops Brief
 At the end of each 90-second run, generate one structured summary containing:
 - journeys monitored;
 - interventions sent;
@@ -158,8 +158,8 @@ Example:
 - `First automated outreach sent`
 - `High-value recipient replied — approval required`
 
-### 5.3 What Claude Handled
-Operator-friendly list of meaningful Claude actions, e.g.:
+### 5.3 What Rescue Agent Handled
+Operator-friendly list of meaningful Rescue Agent actions, e.g.:
 - Reviewed 3 booking journeys
 - Sent first rescue SMS to Sarah
 - Sent payment assistance to Jordan
@@ -195,7 +195,7 @@ Out-of-domain response:
 
 ---
 
-## 6. Claude tool interface
+## 6. Rescue Agent tool interface
 
 Approved tools:
 - `get_marketplace_summary()`
@@ -212,7 +212,7 @@ Approved tools:
 - `escalate_to_operator(booking_id, reason)`
 - `set_autopilot(enabled)`
 
-Claude must not have tools such as:
+Rescue Agent must not have tools such as:
 - `change_rescue_score`
 - `change_booking_value`
 - `mark_booking_completed`
@@ -221,7 +221,7 @@ Claude must not have tools such as:
 - `delete_booking`
 - `edit_marketplace_event`
 
-All write tools re-check policy server-side. A Claude tool request is never itself authorization.
+All write tools re-check policy server-side. A Rescue Agent tool request is never itself authorization.
 
 ---
 
@@ -242,7 +242,7 @@ Example:
 }
 ```
 
-Claude may choose only from allowed interventions.
+Rescue Agent may choose only from allowed interventions.
 
 Supported interventions:
 - `LISTER_REMINDER`
@@ -257,16 +257,16 @@ Supported interventions:
 ## 8. Score and outcome rules
 
 ### Rescue score
-Claude may read, interpret, summarize, and prioritize using the score.
+Rescue Agent may read, interpret, summarize, and prioritize using the score.
 
-Claude may not:
+Rescue Agent may not:
 - change the score;
 - add/remove points;
 - alter thresholds;
 - change the scoring function.
 
 ### Booking outcome
-Claude may summarize outcomes but may not set them.
+Rescue Agent may summarize outcomes but may not set them.
 
 Backend/simulation owns:
 - booking transitions;
@@ -274,29 +274,31 @@ Backend/simulation owns:
 - failure;
 - GMV attribution.
 
-Claude must never grade its own intervention as successful.
+Rescue Agent must never grade its own intervention as successful.
 
 ---
 
-## 9. Claude provider migration
+## 9. Rescue Agent provider implementation
 
-Replace the current OpenAI AI-message layer with Anthropic Claude.
+Use OpenAI as the current server-side LLM provider behind a provider-neutral
+Rescue Agent interface. Product logic must not depend directly on a provider so
+another implementation can be substituted later without changing rescue policy.
 
 Backend environment variables:
 ```text
-ANTHROPIC_API_KEY=<secret>
-ANTHROPIC_MODEL=<model id>
+OPENAI_API_KEY=<secret>
+OPENAI_MODEL=<model id>
+OPENAI_TIMEOUT_SECONDS=<positive seconds; optional, defaults to 20>
 FRONTEND_ORIGIN=<existing production frontend>
 ```
 
-Do not expose Anthropic credentials to frontend.
+Do not expose OpenAI credentials to frontend.
 
-Keep `ANTHROPIC_MODEL` configurable rather than hardcoding a model if possible.
-
-After migration, `OPENAI_API_KEY` should no longer be required unless some unrelated feature still uses it.
+Keep `OPENAI_MODEL` configurable, with a safe backend default. The active V2
+runtime requires `OPENAI_API_KEY`; it does not require alternate-provider credentials.
 
 ### SMS prompt constraints
-Claude-generated SMS must:
+AI-generated SMS must:
 - be concise;
 - be natural;
 - have a clear next action;
@@ -308,7 +310,7 @@ Claude-generated SMS must:
 - avoid manipulative language.
 
 ### Failure behavior
-If Claude is unavailable:
+If Rescue Agent is unavailable:
 - first-message rescue uses deterministic fallback templates;
 - simulation does not crash;
 - fallback is logged;
@@ -318,10 +320,10 @@ If Claude is unavailable:
 
 ## 10. High-value follow-up flow
 
-High-value booking ($4,000+) → rescue eligible → Claude reviews case → backend validates → first SMS auto-sends → recipient replies OR remains unresolved → Claude drafts next action → Needs Immediate Attention → human chooses:
+High-value booking ($4,000+) → rescue eligible → Rescue Agent reviews case → backend validates → first SMS auto-sends → recipient replies OR remains unresolved → Rescue Agent drafts next action → Needs Immediate Attention → human chooses:
 
-- **Approve Claude** → revalidate → send draft
-- **Human Rescue** → operator takes ownership; Claude stops autonomous messaging for that case
+- **Approve AI** → revalidate → send draft
+- **Human Rescue** → operator takes ownership; Rescue Agent stops autonomous messaging for that case
 
 ---
 
@@ -331,12 +333,12 @@ Keep the existing **Rescue Actions** section.
 
 Add a second box below it:
 
-## Claude Agent Log
+## AI Agent Log
 
 Columns:
 - Time
 - Booking
-- Claude Action
+- AI Action
 - Reason
 - Tool
 - Result
@@ -362,16 +364,16 @@ Only log concise operational reasons. Never expose hidden chain-of-thought.
 
 ## 12. Historical context
 
-Claude does not learn/train from interventions in V2.
+Rescue Agent does not learn/train from interventions in V2.
 
-Claude may read:
+Rescue Agent may read:
 - prior rescue actions;
 - prior recipient responses;
 - lister historical response behavior;
 - current simulated-month counts;
 - prior outcomes.
 
-Claude may summarize patterns, e.g.:
+Rescue Agent may summarize patterns, e.g.:
 > Andre has required 4 rescue interventions this simulated month.
 
 No fine-tuning, adaptive scoring, or policy self-modification.
@@ -380,7 +382,7 @@ No fine-tuning, adaptive scoring, or policy self-modification.
 
 ## 13. Suggested new backend models
 
-### ClaudeAgentLog
+### AIAgentLog
 ```text
 id
 timestamp
@@ -405,7 +407,7 @@ created_at
 first_sms_action_id optional
 latest_reply optional
 drafted_response optional
-claude_recommendation
+ai_recommendation
 human_decision optional
 resolved_at optional
 ```
@@ -447,23 +449,23 @@ In-memory persistence is acceptable for this demo if consistent with V1.
 
 ```text
 backend/app/services/
-  claude_client.py
-  claude_agent.py
-  claude_tools.py
+  llm_client.py
+  rescue_agent.py
+  ai_tools.py
   attention.py
   ops_brief.py
   ops_chat.py
 ```
 
 Responsibilities:
-- `claude_client`: Anthropic client/config/error handling
-- `claude_agent`: case review, intervention selection, SMS, escalation
-- `claude_tools`: registered tools and dispatch
+- `llm_client`: OpenAI client/config/error handling
+- `rescue_agent`: case review, intervention selection, SMS, escalation
+- `ai_tools`: registered tools and dispatch
 - `attention`: high-value policy/human approval/takeover
 - `ops_brief`: run summary and urgent brief updates
 - `ops_chat`: operations-only tool-using chat
 
-Do not move deterministic scoring into Claude services.
+Do not move deterministic scoring into Rescue Agent services.
 
 ---
 
@@ -473,7 +475,7 @@ Do not move deterministic scoring into Claude services.
 GET  /ops/brief
 GET  /ops/attention
 GET  /ops/high-value
-GET  /ops/claude-log
+GET  /ops/ai-log
 POST /ops/attention/{id}/approve
 POST /ops/attention/{id}/human-rescue
 POST /ops/chat
@@ -493,9 +495,9 @@ Existing V1 endpoints must continue working.
 Keep the randomized 90-second simulation.
 
 V2 must demonstrate:
-- at least one Claude-reviewed eligible rescue;
-- at least one first SMS sent by Claude;
-- Claude Agent Log entries;
+- at least one Rescue Agent-reviewed eligible rescue;
+- at least one first SMS sent by Rescue Agent;
+- AI Agent Log entries;
 - end-of-run Ops Brief;
 - mixed outcomes.
 
@@ -507,55 +509,55 @@ For reliable QA, add a deterministic test seed/fixture for high-value flow. Rand
 
 ## 17. Security and reliability
 
-- Anthropic API key server-side only.
-- Never put `ANTHROPIC_API_KEY` in `NEXT_PUBLIC_*`.
+- OpenAI API key server-side only.
+- Never put `OPENAI_API_KEY` in `NEXT_PUBLIC_*`.
 - No secrets in logs.
 - Validate tool arguments.
-- Claude cannot call unregistered tools.
-- Simulated user text cannot grant Claude extra permissions.
+- Rescue Agent cannot call unregistered tools.
+- Simulated user text cannot grant Rescue Agent extra permissions.
 - High-value human gate enforced server-side.
 - Human ownership enforced server-side.
 - Existing deterministic fallback templates retained.
-- Claude outage must not crash the demo.
+- Rescue Agent outage must not crash the demo.
 
 ---
 
 ## 18. V2 acceptance criteria
 
 V2 is complete when:
-1. Claude replaces OpenAI for Rescue Agent AI behavior.
+1. OpenAI is the current provider implementation for Rescue Agent AI behavior.
 2. Existing deterministic rescue scoring remains unchanged.
-3. Claude can inspect whole-marketplace state via approved tools.
-4. Claude can select only allowed interventions.
+3. Rescue Agent can inspect whole-marketplace state via approved tools.
+4. Rescue Agent can select only allowed interventions.
 5. First eligible rescue SMS can auto-send.
-6. Backend revalidates every Claude write action.
+6. Backend revalidates every Rescue Agent write action.
 7. Normal-value cases can follow approved autonomous follow-up rules.
 8. High-value = >= $4,000.
 9. High-value first SMS is autonomous.
 10. High-value subsequent communication is human-gated.
-11. Claude pre-drafts high-value follow-up.
+11. Rescue Agent pre-drafts high-value follow-up.
 12. Needs Immediate Attention shows high-value/exception cases.
-13. Approve Claude validates and sends.
+13. Approve AI validates and sends.
 14. Human Rescue transfers control.
 15. No Close/Ignore action exists.
-16. Claude can escalate before first outreach.
+16. Rescue Agent can escalate before first outreach.
 17. `/ops` exists.
-18. End-of-run Claude Ops Brief is generated.
+18. End-of-run Rescue Agent Ops Brief is generated.
 19. Mid-run brief only updates for high-value/urgent events.
-20. What Claude Handled is visible.
+20. What Rescue Agent Handled is visible.
 21. High-Value Watch is visible.
 22. Ask Rescue Agent is operations-only.
 23. Ask Rescue Agent can call approved tools.
 24. Out-of-domain chat is restricted.
 25. Activity Ledger retains Rescue Actions.
-26. Activity Ledger adds Claude Agent Log.
-27. Claude never changes scores.
-28. Claude never sets booking outcomes.
-29. Claude shows only concise operational reasons.
-30. Claude can read prior interventions but does not self-learn.
+26. Activity Ledger adds AI Agent Log.
+27. Rescue Agent never changes scores.
+28. Rescue Agent never sets booking outcomes.
+29. Rescue Agent shows only concise operational reasons.
+30. Rescue Agent can read prior interventions but does not self-learn.
 31. 90-second simulation still works.
 32. GMV metrics remain coherent.
-33. Claude outage degrades safely.
+33. Rescue Agent outage degrades safely.
 34. Backend tests pass.
 35. Frontend lint/build pass.
 36. Render/Vercel deployment still works.
@@ -588,7 +590,7 @@ At the end of every phase:
 4. give manual verification steps;
 5. check `git status`;
 6. commit with specified message;
-7. push to `origin/main`;
+7. push to `origin/claude-v2`;
 8. report commit hash and push result;
 9. STOP;
 10. wait for explicit user approval.
@@ -599,19 +601,19 @@ Never continue automatically.
 
 # 20. V2 implementation phases
 
-## Phase 10 — Anthropic foundation + OpenAI migration
+## Phase 10 — Provider foundation and rescue messaging
 Build:
-- Anthropic dependency/client
-- `ANTHROPIC_API_KEY`
-- `ANTHROPIC_MODEL`
-- replace OpenAI SMS generation with Claude
+- provider-neutral LLM boundary and provider client
+- `OPENAI_API_KEY`
+- configurable `OPENAI_MODEL`
+- Rescue Agent SMS generation
 - preserve fallback templates
 - update env examples/docs
-- remove unused OpenAI dependency if safe
+- keep provider secrets backend-only
 
 Acceptance:
 - existing simulation works;
-- SMS generated by Claude;
+- SMS generated by Rescue Agent;
 - fallback works;
 - scoring/rules unchanged;
 - tests pass.
@@ -619,28 +621,32 @@ Acceptance:
 Commit:
 `phase-10: migrate rescue messaging to claude`
 
+The Phase 10 commit message is retained as immutable project history. The active
+provider strategy was revised during the uncommitted Phase 11 work; OpenAI is now
+the current provider implementation.
+
 Push and stop.
 
 ---
 
-## Phase 11 — Claude tool layer + agent audit log
+## Phase 11 — Rescue Agent tool layer + agent audit log
 Build:
 - approved read/write tools;
 - dispatcher;
 - server-side validation;
-- ClaudeAgentLog;
-- `/ops/claude-log`;
-- Claude Agent Log UI below Rescue Actions.
+- AIAgentLog;
+- `/ops/ai-log`;
+- AI Agent Log UI below Rescue Actions.
 
 Acceptance:
-- Claude can inspect marketplace through tools;
+- Rescue Agent can inspect marketplace through tools;
 - unregistered actions fail;
 - write tools revalidate;
 - tool actions log correctly;
 - existing Rescue Actions unchanged.
 
 Commit:
-`phase-11: add claude ops tools and agent audit log`
+`phase-11: add rescue agent tools and ai audit log`
 
 Push and stop.
 
@@ -654,7 +660,7 @@ Build:
 - high-value follow-up gate;
 - exception escalation;
 - drafted follow-up;
-- Approve Claude;
+- Approve AI;
 - Human Rescue;
 - server-side human ownership.
 
@@ -664,9 +670,9 @@ Acceptance:
 - first high-value message auto-sends;
 - second high-value message cannot send without approval;
 - reply/no-response follow-up creates attention case when applicable;
-- Claude draft exists;
-- Approve Claude sends after validation;
-- Human Rescue blocks Claude sends;
+- Rescue Agent draft exists;
+- Approve AI sends after validation;
+- Human Rescue blocks Rescue Agent sends;
 - exceptions can escalate before first outreach.
 
 Commit:
@@ -676,11 +682,11 @@ Push and stop.
 
 ---
 
-## Phase 13 — Claude Ops Brief console
+## Phase 13 — Rescue Agent Ops Brief console
 Build `/ops` with:
 1. Needs Immediate Attention
-2. Claude Ops Brief
-3. What Claude Handled
+2. Rescue Agent Ops Brief
+3. What Rescue Agent Handled
 4. High-Value Watch
 5. Ask Rescue Agent placeholder
 
@@ -696,7 +702,7 @@ Acceptance:
 - styling matches app.
 
 Commit:
-`phase-13: build claude ops brief console`
+`phase-13: build rescue agent ops brief console`
 
 Push and stop.
 
@@ -707,18 +713,18 @@ Build:
 - structured OpsBrief;
 - one full summary at run completion;
 - high-value/urgent mid-run alerts;
-- What Claude Handled from real logs.
+- What Rescue Agent Handled from real logs.
 
 Acceptance:
 - completed run generates one brief;
 - metrics match backend;
-- Claude does not invent outcomes;
+- Rescue Agent does not invent outcomes;
 - urgent high-value events surface;
 - normal events do not spam summaries;
-- Claude outage degrades safely.
+- Rescue Agent outage degrades safely.
 
 Commit:
-`phase-14: add claude marketplace briefs and priority alerts`
+`phase-14: add rescue agent marketplace briefs and priority alerts`
 
 Push and stop.
 
@@ -727,7 +733,7 @@ Push and stop.
 ## Phase 15 — Ask Rescue Agent + tool actions
 Build:
 - operations-only chat UI;
-- Claude tool-use loop;
+- Rescue Agent tool-use loop;
 - read actions;
 - approved write actions;
 - Autopilot control;
@@ -744,7 +750,7 @@ Acceptance examples:
 - pause/resume Autopilot;
 - handle anything safely allowed.
 
-Claude cannot:
+Rescue Agent cannot:
 - change scores;
 - set outcomes;
 - bypass high-value gate;
@@ -766,9 +772,9 @@ Verify/polish:
 - high-value first-message autonomy;
 - high-value human gate;
 - Needs Immediate Attention;
-- Approve Claude;
+- Approve AI;
 - Human Rescue;
-- Claude logs;
+- Rescue Agent logs;
 - Ops Brief;
 - Ask Rescue Agent;
 - error/loading states;
@@ -780,14 +786,14 @@ Manual reviewer path:
 1. open public dashboard;
 2. start simulation;
 3. see deterministic scores;
-4. see Claude select/send rescue;
-5. see Claude logs;
+4. see Rescue Agent select/send rescue;
+5. see Rescue Agent logs;
 6. encounter/load high-value case;
 7. see first SMS auto-send;
 8. see follow-up require human attention;
 9. open Ops Brief;
 10. review draft;
-11. Approve Claude or Human Rescue;
+11. Approve AI or Human Rescue;
 12. view end-of-run summary;
 13. ask operations question;
 14. use approved chat action;
@@ -802,7 +808,7 @@ Automated:
 - hosted frontend/backend integration.
 
 Commit:
-`phase-16: polish claude powered rescue ops demo`
+`phase-16: polish ai powered rescue ops demo`
 
 Push and stop.
 
@@ -810,8 +816,8 @@ Push and stop.
 
 ## 21. Final V2 demo story
 
-Start Live Simulation → marketplace events → deterministic rescue score → eligible case → Claude reviews allowed actions → Claude chooses intervention → backend validates → first SMS auto-sends → Claude logs action → high-value reply/unresolved follow-up → Claude drafts next response → Needs Immediate Attention → operator chooses Approve Claude or Human Rescue → backend/simulation resolves state → Claude produces end-of-run Ops Brief → operator can ask “What needs my attention?”
+Start Live Simulation → marketplace events → deterministic rescue score → eligible case → Rescue Agent reviews allowed actions → Rescue Agent chooses intervention → backend validates → first SMS auto-sends → Rescue Agent logs action → high-value reply/unresolved follow-up → Rescue Agent drafts next response → Needs Immediate Attention → operator chooses Approve AI or Human Rescue → backend/simulation resolves state → Rescue Agent produces end-of-run Ops Brief → operator can ask “What needs my attention?”
 
 Final product story:
 
-> **The rescue engine provides deterministic policy and risk scoring. Claude operates inside those rules: it handles routine outreach, monitors the whole marketplace, summarizes what happened, and escalates high-value or exceptional cases when human judgment matters.**
+> **The rescue engine provides deterministic policy and risk scoring. Rescue Agent operates inside those rules: it handles routine outreach, monitors the whole marketplace, summarizes what happened, and escalates high-value or exceptional cases when human judgment matters.**

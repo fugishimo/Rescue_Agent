@@ -1,4 +1,5 @@
 from app.models.booking import Booking, BookingStatus, RescueTarget
+from app.models.ai_agent_log import AIActionType, AIAgentLog
 from app.models.event import Event, EventType
 from app.models.lister import Lister
 from app.models.listing import AvailabilityStatus, Listing, Market
@@ -15,6 +16,8 @@ __all__ = [
     "AvailabilityStatus",
     "Booking",
     "BookingStatus",
+    "AIActionType",
+    "AIAgentLog",
     "Event",
     "EventType",
     "InterventionType",

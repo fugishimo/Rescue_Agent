@@ -17,7 +17,7 @@ from app.data.seed_data import (
     MarketplaceSeed,
     ProfileCatalog,
 )
-from app.models import Booking, Event, Listing
+from app.models import Booking, AIAgentLog, Event, Listing
 from app.services.analytics import ActivityResponse, build_activity_response
 from app.services.simulation import (
     SIMULATION_ENGINE,
@@ -113,6 +113,16 @@ async def activity_state() -> ActivityResponse:
     return build_activity_response(
         list(snapshot.bookings), list(snapshot.events), list(snapshot.rescue_actions)
     )
+
+
+@app.get(
+    "/ops/ai-log",
+    response_model=tuple[AIAgentLog, ...],
+    tags=["ai-ops"],
+)
+async def ai_agent_log() -> tuple[AIAgentLog, ...]:
+    """Return newest-first operational AI actions without hidden reasoning."""
+    return SIMULATION_ENGINE.ai_logs()
 
 
 @app.post(

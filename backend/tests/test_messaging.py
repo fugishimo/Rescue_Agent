@@ -15,7 +15,9 @@ from app.models import (
 )
 from app.services import messaging
 from app.services.messaging import (
-    ClaudeMessageGenerator,
+    DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENAI_TIMEOUT_SECONDS,
+    LLMMessageGenerator,
     GenerationFailureCode,
     MAX_SMS_CHARACTERS,
     MessagingService,
@@ -129,7 +131,7 @@ def test_structured_context_contains_only_approved_booking_facts() -> None:
     assert context.intervention_type is InterventionType.LISTER_REMINDER
 
 
-def test_valid_llm_copy_is_normalized_and_marked_claude() -> None:
+def test_valid_llm_copy_is_normalized_and_marked_openai() -> None:
     generator = StubGenerator(
         "  Hi Sarah — can you check the Williamsburg Loft request\n and confirm?  "
     )
@@ -138,7 +140,7 @@ def test_valid_llm_copy_is_normalized_and_marked_claude() -> None:
     result = MessagingService(generator).generate(context)
 
     assert generator.contexts == [context]
-    assert result.message_source is MessageSource.CLAUDE
+    assert result.message_source is MessageSource.OPENAI
     assert result.failure_code is None
     assert result.message_text == (
         "Hi Sarah — can you check the Williamsburg Loft request and confirm?"
@@ -188,19 +190,19 @@ def test_each_intervention_has_a_valid_deterministic_template(
     assert validate_message(message, context) == message
 
 
-def test_claude_generator_uses_structured_output() -> None:
+def test_llm_generator_uses_structured_output() -> None:
     captured: dict[str, object] = {}
 
-    class FakeClaudeClient:
+    class FakeLLMClient:
         def generate_text(self, **kwargs) -> str:
             captured.update(kwargs)
             return '{"message": "Can you confirm?"}'
 
     context = make_context()
-    generator = ClaudeMessageGenerator(
+    generator = LLMMessageGenerator(
         api_key="test-key",
-        model="claude-test-model",
-        client=FakeClaudeClient(),
+        model="gpt-test-model",
+        client=FakeLLMClient(),
     )
 
     assert generator.generate(context) == "Can you confirm?"
@@ -210,21 +212,40 @@ def test_claude_generator_uses_structured_output() -> None:
     assert captured["max_tokens"] == 120
 
 
-def test_environment_requires_anthropic_key_and_model(monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "ignored-openai-key")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+def test_environment_uses_openai_key_and_default_model(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_TIMEOUT_SECONDS", raising=False)
 
     missing_key = MessagingService.from_environment()
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    missing_model = MessagingService.from_environment()
-
-    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     configured = MessagingService.from_environment()
 
     assert missing_key.generator is None
     assert missing_key.unavailable_code is GenerationFailureCode.MISSING_API_KEY
-    assert missing_model.generator is None
-    assert missing_model.unavailable_code is GenerationFailureCode.MISSING_MODEL
-    assert isinstance(configured.generator, ClaudeMessageGenerator)
+    assert isinstance(configured.generator, LLMMessageGenerator)
+    assert configured.generator.client.model == DEFAULT_OPENAI_MODEL
+    assert configured.generator.client.timeout_seconds == DEFAULT_OPENAI_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("value", ["", "not-a-number", "0", "-2"])
+def test_invalid_openai_timeout_uses_safe_default(monkeypatch, value: str) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", value)
+
+    configured = MessagingService.from_environment()
+
+    assert isinstance(configured.generator, LLMMessageGenerator)
+    assert configured.generator.client.timeout_seconds == DEFAULT_OPENAI_TIMEOUT_SECONDS
+
+
+def test_openai_timeout_can_be_configured(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", "35.5")
+
+    configured = MessagingService.from_environment()
+
+    assert isinstance(configured.generator, LLMMessageGenerator)
+    assert configured.generator.client.timeout_seconds == 35.5

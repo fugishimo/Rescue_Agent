@@ -34,16 +34,18 @@ The API is available at `http://localhost:8000`. Verify it directly at
 
 The demo works without credentials by using intervention-specific fallback
 messages. To enable model-generated rescue wording, create a private
-`backend/.env` and add `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`. The backend
+`backend/.env` and add `OPENAI_API_KEY`; `OPENAI_MODEL` and
+`OPENAI_TIMEOUT_SECONDS` are optional. The backend
 loads that file automatically at startup; it never loads `.env.example`.
 Existing environment variables take precedence, preserving Render deployment
 behavior. Both settings stay on the backend, and the environment file is
-ignored by Git. `ANTHROPIC_MODEL` must be a Claude model ID available to the
-configured Anthropic account.
+ignored by Git. The current provider implementation is OpenAI, isolated behind
+a provider-neutral LLM interface. The default model is `gpt-4o-mini`.
 
 ```dotenv
-ANTHROPIC_API_KEY=your_anthropic_api_key
-ANTHROPIC_MODEL=your_claude_model_id
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_TIMEOUT_SECONDS=20
 ```
 
 ## Inspect backend APIs
@@ -60,10 +62,11 @@ With the backend running, seeded data and live engine state are available from:
 - `POST /simulation/reset` — stop and clear the current run
 - `GET /dashboard` — polling-friendly simulation snapshot
 - `GET /activity` — rescue audit records and coherent monthly impact metrics
+- `GET /ops/ai-log` — newest-first AI tool and operational audit entries
 - `POST /autopilot` — enable or disable automatic rescue actions
 
 Qualifying rescue actions contain validated SMS wording and record whether it
-came from Claude or a fallback template. The demo then records a simulated send,
+came from the configured AI provider or a fallback template. The demo then records a simulated send,
 uses the selected profile to produce a reply or no-response outcome, and updates
 the booking. No real SMS provider is connected and no message leaves the app.
 
@@ -88,7 +91,9 @@ to inspect its score breakdown, agent explanation, and full demo message thread.
 Open `http://localhost:3000/activity` to inspect every intervention in the
 current run. Each record retains its trigger, score evidence, explanation,
 message, simulated response, resulting booking state, and any rescued GMV. The
-dashboard and activity page use the same duplicate-safe monthly analytics.
+dashboard and activity page use the same duplicate-safe monthly analytics. A
+second AI Agent Log on the page records approved tool calls, denied requests,
+and concise operational reasons without exposing hidden reasoning.
 
 ## Demo walkthrough
 
@@ -112,7 +117,8 @@ Next.js dashboard + activity ledger
 FastAPI simulation engine
   ├─ seeded renter/lister profiles
   ├─ deterministic rescue scoring and guardrails
-  ├─ constrained Claude message generation with safe fallback
+  ├─ provider-neutral AI message generation with safe fallback
+  ├─ allowlisted AI tools with server-side write revalidation
   ├─ simulated SMS delivery and profile-driven response outcomes
   └─ shared audit and duplicate-safe GMV analytics
 ```
@@ -126,8 +132,9 @@ and activity ledger cannot calculate conflicting results.
 Set these deployment variables without committing their values to the repository:
 
 - Render backend: `FRONTEND_ORIGIN` set to the deployed Vercel origin
-- Render backend: `ANTHROPIC_API_KEY` for model-generated wording
-- Render backend: `ANTHROPIC_MODEL` set to an available Claude model ID
+- Render backend: `OPENAI_API_KEY` for model-generated wording
+- Render backend: optional `OPENAI_MODEL` override (defaults to `gpt-4o-mini`)
+- Render backend: optional `OPENAI_TIMEOUT_SECONDS` override (defaults to `20`)
 - Vercel frontend: `NEXT_PUBLIC_API_URL` set to the deployed Render API origin
 
 The backend always permits `http://localhost:3000` for local development and
@@ -160,4 +167,4 @@ frontend/  Next.js App Router application
 ```
 
 Product requirements and simulation behavior are defined in `PRD.md`,
-`SIMULATION_PROFILES.md`, and `RESCUE_CLAUDE_V2_PRD.md`.
+`SIMULATION_PROFILES.md`, and `RESCUE_AGENT_V2_PRD.md`.

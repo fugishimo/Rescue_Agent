@@ -1,4 +1,9 @@
-import type { ActivityResponse, MarketplaceSeed, SimulationSnapshot } from "./types";
+import type {
+  ActivityResponse,
+  AIAgentLog,
+  MarketplaceSeed,
+  SimulationSnapshot,
+} from "./types";
 
 const API_BASE_URL =
   (
@@ -33,6 +38,10 @@ export function getDashboard() {
 
 export function getActivity() {
   return request<ActivityResponse>("/activity", { cache: "no-store" });
+}
+
+export function getAIAgentLog() {
+  return request<AIAgentLog[]>("/ops/ai-log", { cache: "no-store" });
 }
 
 export function startSimulation() {

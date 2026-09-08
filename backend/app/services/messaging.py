@@ -20,11 +20,14 @@ from app.models import (
     Renter,
     RescueTarget,
 )
-from app.services.claude_client import ClaudeClient
+from app.services.llm_client import LLMClient, OpenAIResponsesClient
 from app.services.rescue_scoring import RescueScore
 
 
 MAX_SMS_CHARACTERS = 240
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 20.0
 
 SYSTEM_INSTRUCTIONS = """You write one booking-rescue SMS using only the supplied JSON facts.
 The deterministic rescue system has already selected the recipient and intervention; do not
@@ -49,7 +52,6 @@ _OUTPUT_SCHEMA = {
 
 class GenerationFailureCode(StrEnum):
     MISSING_API_KEY = "missing_api_key"
-    MISSING_MODEL = "missing_model"
     PROVIDER_ERROR = "provider_error"
     INVALID_OUTPUT = "invalid_output"
 
@@ -83,20 +85,22 @@ class MessageGenerator(Protocol):
     def generate(self, context: RescueMessageContext) -> str: ...
 
 
-class ClaudeMessageGenerator:
-    """Generate tightly structured rescue copy through Claude."""
+class LLMMessageGenerator:
+    """Generate tightly structured rescue copy through an isolated LLM client."""
 
     def __init__(
         self,
         *,
         api_key: str,
         model: str,
-        timeout_seconds: float = 5,
-        client: ClaudeClient | None = None,
+        timeout_seconds: float = DEFAULT_OPENAI_TIMEOUT_SECONDS,
+        base_url: str = DEFAULT_OPENAI_BASE_URL,
+        client: LLMClient | None = None,
     ) -> None:
-        self.client = client or ClaudeClient(
+        self.client = client or OpenAIResponsesClient(
             api_key=api_key,
             model=model,
+            base_url=base_url,
             timeout_seconds=timeout_seconds,
         )
 
@@ -110,7 +114,7 @@ class ClaudeMessageGenerator:
         parsed = json.loads(output_text)
         message = parsed.get("message") if isinstance(parsed, dict) else None
         if not isinstance(message, str):
-            raise ValueError("Claude returned no rescue message")
+            raise ValueError("LLM provider returned no rescue message")
         return message
 
 
@@ -126,16 +130,18 @@ class MessagingService:
 
     @classmethod
     def from_environment(cls) -> "MessagingService":
-        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if not api_key:
             return cls()
-        model = os.getenv("ANTHROPIC_MODEL", "").strip()
-        if not model:
-            return cls(unavailable_code=GenerationFailureCode.MISSING_MODEL)
+        model = os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL).strip()
+        base_url = os.getenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL).strip()
+        timeout_seconds = _openai_timeout_seconds()
         return cls(
-            ClaudeMessageGenerator(
+            LLMMessageGenerator(
                 api_key=api_key,
-                model=model,
+                model=model or DEFAULT_OPENAI_MODEL,
+                base_url=base_url or DEFAULT_OPENAI_BASE_URL,
+                timeout_seconds=timeout_seconds,
             )
         )
 
@@ -152,8 +158,20 @@ class MessagingService:
             return _fallback_result(context, GenerationFailureCode.INVALID_OUTPUT)
         return MessageGenerationResult(
             message_text=validated,
-            message_source=MessageSource.CLAUDE,
+            message_source=MessageSource.OPENAI,
         )
+
+
+def _openai_timeout_seconds() -> float:
+    raw_value = os.getenv(
+        "OPENAI_TIMEOUT_SECONDS",
+        str(DEFAULT_OPENAI_TIMEOUT_SECONDS),
+    ).strip()
+    try:
+        timeout_seconds = float(raw_value)
+    except ValueError:
+        return DEFAULT_OPENAI_TIMEOUT_SECONDS
+    return timeout_seconds if timeout_seconds > 0 else DEFAULT_OPENAI_TIMEOUT_SECONDS
 
 
 def build_rescue_message_context(
