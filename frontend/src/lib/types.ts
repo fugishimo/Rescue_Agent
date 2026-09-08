@@ -96,11 +96,20 @@ export interface SimulationSnapshot {
   progress_percent: number;
   total_planned_events: number;
   processed_planned_events: number;
+  selected_journeys: SelectedJourney[];
   bookings: Booking[];
   events: MarketplaceEvent[];
   scores: Record<string, RescueScore>;
   rescue_actions: RescueAction[];
   analytics: RescueAnalytics;
+}
+
+export interface SelectedJourney {
+  booking_id: string;
+  scenario: string;
+  renter_id: string;
+  lister_id: string;
+  listing_id: string;
 }
 
 export interface RescueAnalytics {
@@ -163,6 +172,22 @@ export interface AIAgentLog {
   tool_arguments_summary: string | null;
   result: string;
   metadata: Record<string, unknown>;
+}
+
+export interface AttentionCase {
+  id: string;
+  booking_id: string;
+  reason: string;
+  priority: string;
+  high_value: boolean;
+  status: "needs_attention" | "awaiting_approval" | "human_handling" | "resolved";
+  created_at: string;
+  first_sms_action_id: string | null;
+  latest_reply: string | null;
+  drafted_response: string | null;
+  ai_recommendation: string;
+  human_decision: "approve_ai" | "human_rescue" | null;
+  resolved_at: string | null;
 }
 
 export interface MarketplaceSeed {

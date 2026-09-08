@@ -135,7 +135,7 @@ def test_follow_up_provider_failure_escalates_without_sending_fallback() -> None
 
 def test_exception_can_escalate_before_first_outreach_and_api_exposes_case() -> None:
     SIMULATION_ENGINE.reset()
-    started = SIMULATION_ENGINE.start(seed=42)
+    started = SIMULATION_ENGINE.start(seed=0)
     booking_id = started.bookings[0].id
     escalation = SIMULATION_ENGINE.record_operator_escalation(
         booking_id=booking_id,
@@ -144,6 +144,7 @@ def test_exception_can_escalate_before_first_outreach_and_api_exposes_case() -> 
 
     with TestClient(app) as client:
         response = client.get("/ops/attention")
+        high_value_response = client.get("/ops/high-value")
         human_response = client.post(
             f"/ops/attention/{escalation['attention_case_id']}/human-rescue"
         )
@@ -155,6 +156,12 @@ def test_exception_can_escalate_before_first_outreach_and_api_exposes_case() -> 
     assert response.json()[0]["status"] == AttentionStatus.NEEDS_ATTENTION.value
     assert human_response.status_code == 200
     assert human_response.json()["status"] == AttentionStatus.HUMAN_HANDLING.value
+    assert high_value_response.status_code == 200
+    assert high_value_response.json()
+    assert all(
+        booking["booking_value"] >= 4_000
+        for booking in high_value_response.json()
+    )
 
 
 def test_pre_outreach_exception_blocks_autonomous_ai_send() -> None:

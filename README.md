@@ -64,6 +64,7 @@ With the backend running, seeded data and live engine state are available from:
 - `GET /activity` — rescue audit records and coherent monthly impact metrics
 - `GET /ops/ai-log` — newest-first AI tool and operational audit entries
 - `GET /ops/attention` — active human-review cases
+- `GET /ops/high-value` — current bookings at or above the $4,000 policy boundary
 - `POST /ops/attention/{id}/approve` — validate and send an approved AI follow-up
 - `POST /ops/attention/{id}/human-rescue` — transfer a case to human ownership
 - `POST /autopilot` — enable or disable automatic rescue actions

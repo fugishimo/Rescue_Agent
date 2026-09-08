@@ -137,6 +137,16 @@ async def attention_cases() -> tuple[AttentionCase, ...]:
     return SIMULATION_ENGINE.attention_cases()
 
 
+@app.get(
+    "/ops/high-value",
+    response_model=tuple[Booking, ...],
+    tags=["ai-ops"],
+)
+async def high_value_bookings() -> tuple[Booking, ...]:
+    """Return current bookings classified as high value by backend policy."""
+    return SIMULATION_ENGINE.high_value_bookings()
+
+
 @app.post(
     "/ops/attention/{case_id}/approve",
     response_model=AttentionCase,

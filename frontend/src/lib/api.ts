@@ -1,6 +1,8 @@
 import type {
   ActivityResponse,
   AIAgentLog,
+  AttentionCase,
+  Booking,
   MarketplaceSeed,
   SimulationSnapshot,
 } from "./types";
@@ -42,6 +44,26 @@ export function getActivity() {
 
 export function getAIAgentLog() {
   return request<AIAgentLog[]>("/ops/ai-log", { cache: "no-store" });
+}
+
+export function getAttentionCases() {
+  return request<AttentionCase[]>("/ops/attention", { cache: "no-store" });
+}
+
+export function getHighValueBookings() {
+  return request<Booking[]>("/ops/high-value", { cache: "no-store" });
+}
+
+export function approveAIFollowUp(caseId: string) {
+  return request<AttentionCase>(`/ops/attention/${caseId}/approve`, {
+    method: "POST",
+  });
+}
+
+export function selectHumanRescue(caseId: string) {
+  return request<AttentionCase>(`/ops/attention/${caseId}/human-rescue`, {
+    method: "POST",
+  });
 }
 
 export function startSimulation() {

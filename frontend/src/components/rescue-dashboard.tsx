@@ -302,6 +302,7 @@ export function RescueDashboard() {
           <p>Live marketplace intervention console</p>
         </div>
         <div className={styles.headerControls}>
+          <Link className={styles.navLink} href="/ops">Ops brief</Link>
           <Link className={styles.navLink} href="/activity">Activity log</Link>
           <div className={styles.liveState} data-live={isRunning}>
             <span aria-hidden="true" />

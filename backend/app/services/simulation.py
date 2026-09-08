@@ -328,6 +328,20 @@ class SimulationEngine:
                 if case.status is not AttentionStatus.RESOLVED
             )
 
+    def high_value_bookings(self) -> tuple[Booking, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    (
+                        booking
+                        for booking in self._bookings.values()
+                        if is_high_value(booking)
+                    ),
+                    key=lambda booking: booking.booking_value,
+                    reverse=True,
+                )
+            )
+
     def approve_attention_case(self, case_id: str) -> AttentionCase:
         with self._lock:
             case_index = self._attention_case_index(case_id)
