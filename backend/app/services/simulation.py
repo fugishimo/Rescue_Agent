@@ -13,21 +13,53 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.data.profiles import LISTERS, RENTERS
 from app.data.seed_data import LISTINGS
 from app.models import (
+    AttentionCase,
+    AttentionStatus,
     Booking,
     BookingStatus,
+    AIActionType,
+    AIAgentLog,
     Event,
     EventType,
+    InterventionType,
+    HumanDecision,
     Lister,
     Listing,
+    MessageSource,
+    OpsBrief,
+    OpsBriefResponse,
+    OpsChatMessage,
+    OpsChatResponse,
+    OpsChatRole,
+    PriorityAlert,
+    PriorityAlertType,
     Renter,
     RescueAction,
     RescueActionStatus,
     RescueOutcome,
     RescueTarget,
 )
-from app.services.messaging import MessagingService, build_rescue_message_context
+from app.services.attention import is_high_value
 from app.services.analytics import RescueAnalytics, calculate_analytics
-from app.services.rescue_rules import GuardrailCode, evaluate_rescue_rules
+from app.services.ai_tools import (
+    AIToolDeniedError,
+    AIToolDispatchResult,
+    AIToolDispatcher,
+)
+from app.services.messaging import (
+    MessageGenerationResult,
+    MessagingService,
+    RescueMessageContext,
+    build_rescue_message_context,
+    validate_message,
+)
+from app.services.ops_brief import build_ops_brief
+from app.services.ops_chat import OpsChatService, OpsEntity
+from app.services.rescue_rules import (
+    GuardrailCode,
+    RescueRuleDecision,
+    evaluate_rescue_rules,
+)
 from app.services.rescue_scoring import RescueScore, calculate_rescue_score
 
 
@@ -85,6 +117,18 @@ class AutopilotRequest(BaseModel):
 
 class SimulationAlreadyRunningError(RuntimeError):
     pass
+
+
+class AttentionCaseNotFoundError(RuntimeError):
+    pass
+
+
+class AttentionActionDeniedError(RuntimeError):
+    pass
+
+
+_UNSCOPED_TOOL_CALL = object()
+MAX_AI_OUTBOUND_MESSAGES_PER_BOOKING = 2
 
 
 @dataclass(frozen=True)
@@ -159,6 +203,7 @@ class SimulationEngine:
         duration_seconds: float = 90,
         speed_multiplier: int = 30,
         messaging_service: MessagingService | None = None,
+        ops_chat_service: OpsChatService | None = None,
     ):
         if duration_seconds <= 0:
             raise ValueError("duration_seconds must be positive")
@@ -168,6 +213,7 @@ class SimulationEngine:
         self.duration_seconds = duration_seconds
         self.speed_multiplier = speed_multiplier
         self.messaging_service = messaging_service or MessagingService()
+        self.ops_chat_service = ops_chat_service or OpsChatService()
         self._lock = threading.RLock()
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
@@ -188,7 +234,15 @@ class SimulationEngine:
         self._processed_planned_events = 0
         self._scores: dict[str, RescueScore] = {}
         self._rescue_actions: list[RescueAction] = []
+        self._ai_logs: list[AIAgentLog] = []
+        self._attention_cases: list[AttentionCase] = []
+        self._ops_brief: OpsBrief | None = None
+        self._priority_alerts: list[PriorityAlert] = []
+        self._priority_alert_keys: set[tuple[PriorityAlertType, str]] = set()
+        self._ops_chat_messages: list[OpsChatMessage] = []
+        self._human_owned_booking_ids: set[str] = set()
         self._held_triggers: set[tuple[str, str]] = set()
+        self._ai_tools = AIToolDispatcher(self)
 
     def start(self, seed: int | None = None) -> SimulationSnapshot:
         with self._lock:
@@ -219,6 +273,13 @@ class SimulationEngine:
             self._processed_planned_events = 0
             self._scores = {}
             self._rescue_actions = []
+            self._ai_logs = []
+            self._attention_cases = []
+            self._ops_brief = None
+            self._priority_alerts = []
+            self._priority_alert_keys = set()
+            self._ops_chat_messages = []
+            self._human_owned_booking_ids = set()
             self._held_triggers = set()
             for booking_id in self._bookings:
                 self._refresh_score(booking_id, record_event=False)
@@ -260,6 +321,13 @@ class SimulationEngine:
             self._processed_planned_events = 0
             self._scores = {}
             self._rescue_actions = []
+            self._ai_logs = []
+            self._attention_cases = []
+            self._ops_brief = None
+            self._priority_alerts = []
+            self._priority_alert_keys = set()
+            self._ops_chat_messages = []
+            self._human_owned_booking_ids = set()
             self._held_triggers = set()
             return self._snapshot_locked()
 
@@ -274,6 +342,478 @@ class SimulationEngine:
                 for booking_id in self._bookings:
                     self._evaluate_booking(booking_id)
             return self._snapshot_locked()
+
+    def ai_logs(self) -> tuple[AIAgentLog, ...]:
+        with self._lock:
+            return tuple(
+                log for log in reversed(self._ai_logs) if log.run_id == self._run_id
+            )
+
+    def attention_cases(self) -> tuple[AttentionCase, ...]:
+        with self._lock:
+            return tuple(
+                case
+                for case in reversed(self._attention_cases)
+                if case.status is not AttentionStatus.RESOLVED
+                and case.booking_id in self._bookings
+            )
+
+    def high_value_bookings(self) -> tuple[Booking, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    (
+                        booking
+                        for booking in self._bookings.values()
+                        if is_high_value(booking)
+                    ),
+                    key=lambda booking: booking.booking_value,
+                    reverse=True,
+                )
+            )
+
+    def ops_brief_state(self) -> OpsBriefResponse:
+        with self._lock:
+            return OpsBriefResponse(
+                run_id=self._run_id,
+                run_status=self._status.value,
+                brief=self._ops_brief,
+                priority_alerts=tuple(reversed(self._priority_alerts)),
+            )
+
+    def ops_chat(self, message: str) -> OpsChatResponse:
+        normalized = " ".join(message.split())
+        with self._lock:
+            run_id = self._run_id
+            user_message = OpsChatMessage(
+                id=f"ops_chat_{uuid4().hex[:12]}",
+                timestamp=datetime.now(timezone.utc),
+                role=OpsChatRole.USER,
+                content=normalized,
+            )
+            self._ops_chat_messages.append(user_message)
+            entities = self._ops_chat_entities_locked()
+
+        turn = self.ops_chat_service.respond(
+            normalized,
+            lambda tool_name, arguments: self.dispatch_ai_tool(
+                tool_name,
+                arguments,
+                expected_run_id=run_id,
+            ),
+            entities,
+        )
+        assistant_message = OpsChatMessage(
+            id=f"ops_chat_{uuid4().hex[:12]}",
+            timestamp=datetime.now(timezone.utc),
+            role=OpsChatRole.ASSISTANT,
+            content=turn.content,
+            tool_calls=turn.tool_results,
+        )
+        with self._lock:
+            if self._run_id != run_id:
+                return OpsChatResponse(
+                    run_id=self._run_id,
+                    message=assistant_message.model_copy(
+                        update={
+                            "content": (
+                                "The simulation run changed while I was checking. "
+                                "Please ask again for the current run."
+                            ),
+                            "tool_calls": (),
+                        }
+                    )
+                )
+            self._ops_chat_messages.append(assistant_message)
+        return OpsChatResponse(run_id=run_id, message=assistant_message)
+
+    def _ops_chat_entities_locked(self) -> tuple[OpsEntity, ...]:
+        grouped: dict[tuple[str, str], dict[str, object]] = {}
+        renters = {renter.id: renter for renter in RENTERS}
+        listers = {lister.id: lister for lister in LISTERS}
+        listings = {listing.id: listing for listing in LISTINGS}
+        for booking in self._bookings.values():
+            renter = renters[booking.renter_id]
+            lister = listers[booking.lister_id]
+            listing = listings[booking.listing_id]
+            for kind, entity_id, name in (
+                ("renter", renter.id, renter.name),
+                ("lister", lister.id, lister.name),
+                ("listing", listing.id, listing.name),
+            ):
+                record = grouped.setdefault(
+                    (kind, entity_id),
+                    {"name": name, "booking_ids": []},
+                )
+                booking_ids = record["booking_ids"]
+                if isinstance(booking_ids, list):
+                    booking_ids.append(booking.id)
+            grouped[("booking", booking.id)] = {
+                "name": f"{renter.name} → {listing.name} ({booking.id})",
+                "booking_ids": [booking.id],
+            }
+        return tuple(
+            OpsEntity(
+                kind=kind,
+                id=entity_id,
+                name=str(record["name"]),
+                booking_ids=tuple(str(value) for value in record["booking_ids"]),
+            )
+            for (kind, entity_id), record in grouped.items()
+        )
+
+    def approve_attention_case(self, case_id: str) -> AttentionCase:
+        with self._lock:
+            case_index = self._attention_case_index(case_id)
+            case = self._attention_cases[case_index]
+            if case.status is not AttentionStatus.AWAITING_APPROVAL:
+                raise AttentionActionDeniedError(
+                    "Attention case is not awaiting AI follow-up approval."
+                )
+            if not case.high_value or not case.drafted_response:
+                raise AttentionActionDeniedError(
+                    "Attention case has no approvable high-value follow-up draft."
+                )
+            if case.booking_id in self._human_owned_booking_ids:
+                raise AttentionActionDeniedError(
+                    "Human Rescue owns this booking and blocks AI messaging."
+                )
+
+            booking = self._bookings.get(case.booking_id)
+            score = self._scores.get(case.booking_id)
+            if booking is None or score is None:
+                raise AttentionActionDeniedError(
+                    "Booking is unavailable for follow-up validation."
+                )
+            if booking.status in {
+                BookingStatus.CANCELED,
+                BookingStatus.COMPLETED,
+                BookingStatus.LOST,
+            }:
+                raise AttentionActionDeniedError(
+                    "Booking is no longer eligible for rescue follow-up."
+                )
+            recipient, target_id = self._recipient_and_target(booking, score)
+            if (
+                recipient is None
+                or target_id is None
+                or score.target is None
+                or score.recommended_intervention is None
+                or recipient.opted_out
+                or not recipient.phone_demo_id
+            ):
+                raise AttentionActionDeniedError(
+                    "Current recipient or intervention context failed validation."
+                )
+            follow_up_context = self._follow_up_context(
+                booking,
+                score,
+                first_message=self._first_message_for(case.booking_id),
+                latest_reply=case.latest_reply,
+            )
+            validated_message = validate_message(
+                case.drafted_response,
+                follow_up_context,
+            )
+            if validated_message is None:
+                raise AttentionActionDeniedError(
+                    "Drafted response failed current server-side message validation."
+                )
+
+            sent_at = datetime.now(timezone.utc)
+            action = RescueAction(
+                id=f"action_{uuid4().hex[:12]}",
+                run_id=self._run_id,
+                booking_id=booking.id,
+                score_at_trigger=score.score,
+                intervention_type=score.recommended_intervention,
+                target_type=score.target,
+                target_id=target_id,
+                reason_summary="Human-approved high-value rescue follow-up.",
+                message_text=validated_message,
+                message_source=MessageSource.OPENAI,
+                status=RescueActionStatus.SENT,
+                sent_at=sent_at,
+                outcome=RescueOutcome.STILL_AT_RISK,
+            )
+            self._rescue_actions.append(action)
+            self._record_approved_follow_up_events(action, score, recipient.name)
+            resolved = case.model_copy(
+                update={
+                    "status": AttentionStatus.RESOLVED,
+                    "human_decision": HumanDecision.APPROVE_AI,
+                    "resolved_at": sent_at,
+                }
+            )
+            self._attention_cases[case_index] = resolved
+            self.record_ai_log(
+                action_type=AIActionType.HUMAN_APPROVED,
+                reason_summary="Operator approved the validated high-value AI follow-up.",
+                result="sent",
+                booking_id=booking.id,
+                tool_name="approve_ai_followup",
+                metadata={"attention_case_id": case.id, "action_id": action.id},
+            )
+            return resolved
+
+    def human_rescue_attention_case(self, case_id: str) -> AttentionCase:
+        with self._lock:
+            case_index = self._attention_case_index(case_id)
+            case = self._attention_cases[case_index]
+            if case.status is AttentionStatus.RESOLVED:
+                raise AttentionActionDeniedError("Attention case is already resolved.")
+            self._human_owned_booking_ids.add(case.booking_id)
+            human_owned = case.model_copy(
+                update={
+                    "status": AttentionStatus.HUMAN_HANDLING,
+                    "human_decision": HumanDecision.HUMAN_RESCUE,
+                }
+            )
+            self._attention_cases[case_index] = human_owned
+            self.record_ai_log(
+                action_type=AIActionType.HUMAN_TAKEOVER,
+                reason_summary="Operator selected Human Rescue; AI sends are blocked.",
+                result="human_handling",
+                booking_id=case.booking_id,
+                tool_name="human_rescue",
+                metadata={"attention_case_id": case.id},
+            )
+            return human_owned
+
+    def record_ai_log(
+        self,
+        *,
+        action_type: AIActionType,
+        reason_summary: str,
+        result: str,
+        booking_id: str | None = None,
+        tool_name: str | None = None,
+        tool_arguments_summary: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> AIAgentLog:
+        with self._lock:
+            entry = AIAgentLog(
+                id=f"ai_log_{uuid4().hex[:12]}",
+                run_id=self._run_id,
+                timestamp=datetime.now(timezone.utc),
+                booking_id=booking_id,
+                action_type=action_type,
+                reason_summary=reason_summary,
+                tool_name=tool_name,
+                tool_arguments_summary=tool_arguments_summary,
+                result=result,
+                metadata=metadata or {},
+            )
+            self._ai_logs.append(entry)
+            return entry
+
+    def dispatch_ai_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, object] | None = None,
+        *,
+        expected_run_id: str | None | object = _UNSCOPED_TOOL_CALL,
+    ) -> AIToolDispatchResult:
+        with self._lock:
+            if (
+                expected_run_id is not _UNSCOPED_TOOL_CALL
+                and self._run_id != expected_run_id
+            ):
+                raise AIToolDeniedError(
+                    "The simulation run changed; current-run data must be requested again."
+                )
+            return self._ai_tools.dispatch(tool_name, arguments)
+
+    def send_ai_rescue_sms(
+        self,
+        *,
+        booking_id: str,
+        intervention_type: InterventionType,
+        message: str,
+    ) -> RescueAction:
+        with self._lock:
+            booking = self._bookings.get(booking_id)
+            score = self._scores.get(booking_id)
+            if booking is None or score is None:
+                raise AIToolDeniedError(
+                    "Booking does not exist in the current marketplace."
+                )
+            if booking_id in self._human_owned_booking_ids:
+                raise AIToolDeniedError(
+                    "Human Rescue owns this booking and blocks AI messaging."
+                )
+            prior_sent_actions = [
+                action
+                for action in self._rescue_actions
+                if action.booking_id == booking_id
+                and action.status is RescueActionStatus.SENT
+            ]
+            if is_high_value(booking) and prior_sent_actions:
+                raise AIToolDeniedError(
+                    "High-value follow-up requires explicit Approve AI review."
+                )
+            ai_authored_sent_actions = [
+                action
+                for action in prior_sent_actions
+                if action.message_source is MessageSource.OPENAI
+            ]
+            if len(ai_authored_sent_actions) >= MAX_AI_OUTBOUND_MESSAGES_PER_BOOKING:
+                raise AIToolDeniedError(
+                    "The autonomous AI message limit has been reached for this booking."
+                )
+            active_attention = self._active_attention_case_for(booking_id)
+            if active_attention is not None:
+                raise AIToolDeniedError(
+                    "Booking requires attention-case review before AI messaging."
+                )
+            recipient, target_id = self._recipient_and_target(booking, score)
+            decision = self._rescue_decision(
+                booking,
+                score,
+                recipient,
+                target_id,
+            )
+            if not decision.should_create_action:
+                raise AIToolDeniedError(decision.explanation)
+            if intervention_type is not score.recommended_intervention:
+                raise AIToolDeniedError(
+                    "Requested intervention is outside the deterministic allowed action set."
+                )
+            context = self._message_context(booking, score)
+            validated_message = validate_message(message, context)
+            if validated_message is None:
+                raise AIToolDeniedError(
+                    "Requested message failed backend rescue-message validation."
+                )
+            return self._create_rescue_action(
+                booking,
+                score,
+                recipient,
+                target_id,
+                generation=MessageGenerationResult(
+                    message_text=validated_message,
+                    message_source=MessageSource.OPENAI,
+                ),
+                log_request=False,
+            )
+
+    def record_operator_escalation(
+        self,
+        *,
+        booking_id: str,
+        reason: str,
+    ) -> dict[str, object]:
+        with self._lock:
+            if booking_id not in self._bookings:
+                raise AIToolDeniedError(
+                    "Booking does not exist in the current marketplace."
+                )
+            concise_reason = " ".join(reason.split())
+            if not concise_reason:
+                raise AIToolDeniedError("Escalation reason is required.")
+            case = self._create_attention_case(
+                booking_id=booking_id,
+                reason=concise_reason,
+                status=AttentionStatus.NEEDS_ATTENTION,
+                latest_reply=None,
+                drafted_response=None,
+                ai_recommendation="Human review is required before outreach continues.",
+            )
+            return {
+                "booking_id": booking_id,
+                "status": "escalated",
+                "reason": concise_reason[:280],
+                "attention_case_id": case.id,
+            }
+
+    def _attention_case_index(self, case_id: str) -> int:
+        index = next(
+            (
+                index
+                for index, case in enumerate(self._attention_cases)
+                if case.id == case_id
+            ),
+            None,
+        )
+        if index is None:
+            raise AttentionCaseNotFoundError("Attention case was not found.")
+        return index
+
+    def _active_attention_case_for(self, booking_id: str) -> AttentionCase | None:
+        return next(
+            (
+                case
+                for case in reversed(self._attention_cases)
+                if case.booking_id == booking_id
+                and case.status is not AttentionStatus.RESOLVED
+            ),
+            None,
+        )
+
+    def _create_attention_case(
+        self,
+        *,
+        booking_id: str,
+        reason: str,
+        status: AttentionStatus,
+        latest_reply: str | None,
+        drafted_response: str | None,
+        ai_recommendation: str,
+    ) -> AttentionCase:
+        booking = self._bookings[booking_id]
+        existing_index = next(
+            (
+                index
+                for index, case in enumerate(self._attention_cases)
+                if case.booking_id == booking_id
+                and case.status is not AttentionStatus.RESOLVED
+            ),
+            None,
+        )
+        first_action = next(
+            (
+                action
+                for action in self._rescue_actions
+                if action.booking_id == booking_id
+            ),
+            None,
+        )
+        now = datetime.now(timezone.utc)
+        if existing_index is None:
+            case = AttentionCase(
+                id=f"attention_{uuid4().hex[:12]}",
+                booking_id=booking_id,
+                reason=reason[:280],
+                priority="urgent" if is_high_value(booking) else "high",
+                high_value=is_high_value(booking),
+                status=status,
+                created_at=now,
+                first_sms_action_id=first_action.id if first_action else None,
+                latest_reply=latest_reply,
+                drafted_response=drafted_response,
+                ai_recommendation=ai_recommendation[:280],
+            )
+            self._attention_cases.append(case)
+            return case
+
+        existing = self._attention_cases[existing_index]
+        updated = existing.model_copy(
+            update={
+                "reason": reason[:280],
+                "priority": "urgent" if is_high_value(booking) else "high",
+                "high_value": is_high_value(booking),
+                "status": status,
+                "first_sms_action_id": (
+                    existing.first_sms_action_id
+                    or (first_action.id if first_action else None)
+                ),
+                "latest_reply": latest_reply,
+                "drafted_response": drafted_response,
+                "ai_recommendation": ai_recommendation[:280],
+            }
+        )
+        self._attention_cases[existing_index] = updated
+        return updated
 
     def _run(self, run_id: str, cancel: threading.Event) -> None:
         with self._lock:
@@ -297,12 +837,31 @@ class SimulationEngine:
             delivery_threads = tuple(self._delivery_threads)
         for delivery_thread in delivery_threads:
             if delivery_thread.is_alive():
-                delivery_thread.join(timeout=self._scaled_delay(5))
+                delivery_thread.join(timeout=max(0.05, self._scaled_delay(5)))
 
         with self._lock:
             if self._run_id == run_id and self._status is SimulationStatus.RUNNING:
                 self._status = SimulationStatus.COMPLETED
                 self._completed_at = datetime.now(timezone.utc)
+                active_attention_cases = tuple(
+                    case
+                    for case in self._attention_cases
+                    if case.status is not AttentionStatus.RESOLVED
+                )
+                self._ops_brief = build_ops_brief(
+                    run_id=run_id,
+                    generated_at=self._completed_at,
+                    journeys_monitored=len(self._journeys),
+                    bookings=tuple(self._bookings.values()),
+                    rescue_actions=tuple(self._rescue_actions),
+                    active_attention_cases=active_attention_cases,
+                )
+                self.record_ai_log(
+                    action_type=AIActionType.OPS_BRIEF_GENERATED,
+                    reason_summary="Generated the final run brief from backend-owned metrics.",
+                    result="generated",
+                    metadata={"run_id": run_id},
+                )
 
     def _apply_event(self, run_id: str, planned_event: _PlannedEvent) -> None:
         with self._lock:
@@ -372,6 +931,16 @@ class SimulationEngine:
                 "rescue_target": score.target,
             }
         )
+        if is_high_value(self._bookings[booking_id]) and score.score >= 70:
+            risk_label = "critical" if score.score >= 85 else "high"
+            self._record_priority_alert(
+                booking=self._bookings[booking_id],
+                alert_type=PriorityAlertType.HIGH_VALUE_RISK,
+                message=(
+                    f"${booking.booking_value:,} high-value booking entered "
+                    f"{risk_label} risk."
+                ),
+            )
 
         if record_event and (
             previous_score is None or previous_score.score != score.score
@@ -397,128 +966,34 @@ class SimulationEngine:
             )
 
     def _evaluate_booking(self, booking_id: str) -> None:
+        if (
+            booking_id in self._human_owned_booking_ids
+            or self._active_attention_case_for(booking_id) is not None
+        ):
+            return
         booking = self._bookings[booking_id]
         score = self._scores[booking_id]
-        if score.target is RescueTarget.RENTER:
-            recipient = next(
-                renter for renter in RENTERS if renter.id == booking.renter_id
-            )
-            target_id = booking.renter_id
-        elif score.target is RescueTarget.LISTER:
-            recipient = next(
-                lister for lister in LISTERS if lister.id == booking.lister_id
-            )
-            target_id = booking.lister_id
-        else:
-            recipient = None
-            target_id = None
-
-        decision = evaluate_rescue_rules(
-            booking=booking,
-            score=score,
-            autopilot_enabled=self._autopilot_enabled,
-            target_id=target_id,
-            recipient_phone_available=bool(
-                recipient and getattr(recipient, "phone_demo_id", None)
-            ),
-            recipient_opted_out=bool(recipient and recipient.opted_out),
-            existing_actions=self._rescue_actions,
-        )
+        recipient, target_id = self._recipient_and_target(booking, score)
+        decision = self._rescue_decision(booking, score, recipient, target_id)
         if decision.should_create_action:
-            triggered_at = datetime.now(timezone.utc)
-            if booking.at_risk_at is None:
-                booking = booking.model_copy(update={"at_risk_at": triggered_at})
-                self._bookings[booking_id] = booking
-            action = RescueAction(
-                id=f"action_{uuid4().hex[:12]}",
+            self.record_ai_log(
+                action_type=AIActionType.CASE_REVIEWED,
+                reason_summary="Rescue-eligible booking passed deterministic policy review.",
+                result="eligible",
                 booking_id=booking_id,
-                score_at_trigger=score.score,
-                intervention_type=score.recommended_intervention,
-                target_type=score.target,
-                target_id=target_id,
-                reason_summary=score.explanation,
-                status=RescueActionStatus.PENDING,
+                metadata={"score": score.score},
             )
-            self._rescue_actions.append(action)
-            self._events.append(
-                Event(
-                    id=f"event_{uuid4().hex[:12]}",
-                    booking_id=booking_id,
-                    event_type=EventType.RESCUE_TRIGGERED,
-                    timestamp=triggered_at,
-                    metadata={
-                        "action_id": action.id,
-                        "score": score.score,
-                        "target": score.target.value,
-                        "intervention": score.recommended_intervention.value,
-                        "explanation": score.explanation,
-                        "trigger_code": score.trigger_code,
-                        "score_reasons": [
-                            reason.model_dump(mode="json") for reason in score.reasons
-                        ],
-                        "status": RescueActionStatus.PENDING.value,
-                    },
-                )
+            self.record_ai_log(
+                action_type=AIActionType.INTERVENTION_SELECTED,
+                reason_summary="Selected the backend-approved deterministic intervention.",
+                result="selected",
+                booking_id=booking_id,
+                metadata={
+                    "intervention": score.recommended_intervention.value,
+                    "target": score.target.value,
+                },
             )
-            renter = next(renter for renter in RENTERS if renter.id == booking.renter_id)
-            lister = next(lister for lister in LISTERS if lister.id == booking.lister_id)
-            listing = next(
-                listing for listing in LISTINGS if listing.id == booking.listing_id
-            )
-            context = build_rescue_message_context(
-                booking=booking,
-                score=score,
-                renter=renter,
-                lister=lister,
-                listing=listing,
-                events=[
-                    event for event in self._events if event.booking_id == booking_id
-                ],
-            )
-            generation = self.messaging_service.generate(context)
-            generated_action = action.model_copy(
-                update={
-                    "message_text": generation.message_text,
-                    "message_source": generation.message_source,
-                    "status": RescueActionStatus.GENERATED,
-                }
-            )
-            self._rescue_actions[-1] = generated_action
-            self._events.append(
-                Event(
-                    id=f"event_{uuid4().hex[:12]}",
-                    booking_id=booking_id,
-                    event_type=EventType.SMS_GENERATED,
-                    timestamp=datetime.now(timezone.utc),
-                    metadata={
-                        "action_id": generated_action.id,
-                        "intervention": generated_action.intervention_type.value,
-                        "target": generated_action.target_type.value,
-                        "message_source": generation.message_source.value,
-                        "generation_failure": (
-                            generation.failure_code.value
-                            if generation.failure_code
-                            else None
-                        ),
-                        "status": RescueActionStatus.GENERATED.value,
-                    },
-                )
-            )
-            response_plan = self._plan_response(generated_action, recipient)
-            delivery_thread = threading.Thread(
-                target=self._deliver_action,
-                args=(
-                    self._run_id,
-                    generated_action.id,
-                    recipient.name,
-                    response_plan,
-                    self._cancel,
-                ),
-                name=f"delivery-{generated_action.id}",
-                daemon=True,
-            )
-            self._delivery_threads.append(delivery_thread)
-            delivery_thread.start()
+            self._create_rescue_action(booking, score, recipient, target_id)
             return
 
         if (
@@ -541,6 +1016,331 @@ class SimulationEngine:
                         },
                     )
                 )
+
+    def _recipient_and_target(
+        self,
+        booking: Booking,
+        score: RescueScore,
+    ) -> tuple[Renter | Lister | None, str | None]:
+        if score.target is RescueTarget.RENTER:
+            return (
+                next(renter for renter in RENTERS if renter.id == booking.renter_id),
+                booking.renter_id,
+            )
+        if score.target is RescueTarget.LISTER:
+            return (
+                next(lister for lister in LISTERS if lister.id == booking.lister_id),
+                booking.lister_id,
+            )
+        return None, None
+
+    def _rescue_decision(
+        self,
+        booking: Booking,
+        score: RescueScore,
+        recipient: Renter | Lister | None,
+        target_id: str | None,
+    ) -> RescueRuleDecision:
+        return evaluate_rescue_rules(
+            booking=booking,
+            score=score,
+            autopilot_enabled=self._autopilot_enabled,
+            target_id=target_id,
+            recipient_phone_available=bool(
+                recipient and getattr(recipient, "phone_demo_id", None)
+            ),
+            recipient_opted_out=bool(recipient and recipient.opted_out),
+            existing_actions=self._rescue_actions,
+        )
+
+    def _message_context(
+        self,
+        booking: Booking,
+        score: RescueScore,
+    ) -> RescueMessageContext:
+        renter = next(renter for renter in RENTERS if renter.id == booking.renter_id)
+        lister = next(lister for lister in LISTERS if lister.id == booking.lister_id)
+        listing = next(listing for listing in LISTINGS if listing.id == booking.listing_id)
+        return build_rescue_message_context(
+            booking=booking,
+            score=score,
+            renter=renter,
+            lister=lister,
+            listing=listing,
+            events=[event for event in self._events if event.booking_id == booking.id],
+        )
+
+    def _follow_up_context(
+        self,
+        booking: Booking,
+        score: RescueScore,
+        *,
+        first_message: str | None,
+        latest_reply: str | None,
+    ) -> RescueMessageContext:
+        return self._message_context(booking, score).model_copy(
+            update={
+                "problem": (
+                    "high_value_reply_follow_up"
+                    if latest_reply
+                    else "high_value_no_response_follow_up"
+                ),
+                "is_follow_up": True,
+                "prior_message": first_message,
+                "latest_reply": latest_reply,
+            }
+        )
+
+    def _first_message_for(self, booking_id: str) -> str | None:
+        first_action = next(
+            (
+                action
+                for action in self._rescue_actions
+                if action.booking_id == booking_id and action.message_text
+            ),
+            None,
+        )
+        return first_action.message_text if first_action else None
+
+    def _create_high_value_follow_up_attention(
+        self,
+        *,
+        action: RescueAction,
+        booking: Booking,
+        plan: _ResponsePlan,
+    ) -> AttentionCase:
+        score = self._scores[booking.id]
+        follow_up_context = self._follow_up_context(
+            booking,
+            score,
+            first_message=action.message_text,
+            latest_reply=plan.response_text,
+        )
+        generation = self.messaging_service.generate(follow_up_context)
+        drafted_response = (
+            generation.message_text if generation.failure_code is None else None
+        )
+        reason = (
+            "High-value recipient replied; follow-up requires human approval."
+            if plan.should_respond
+            else "High-value outreach received no reply; follow-up requires human approval."
+        )
+        case = self._create_attention_case(
+            booking_id=booking.id,
+            reason=reason,
+            status=(
+                AttentionStatus.AWAITING_APPROVAL
+                if drafted_response
+                else AttentionStatus.NEEDS_ATTENTION
+            ),
+            latest_reply=plan.response_text,
+            drafted_response=drafted_response,
+            ai_recommendation=(
+                "Review the drafted follow-up and choose Approve AI or Human Rescue."
+                if drafted_response
+                else "AI drafting was unavailable; choose Human Rescue."
+            ),
+        )
+        self.record_ai_log(
+            action_type=AIActionType.HIGH_VALUE_FLAGGED,
+            reason_summary=reason,
+            result=case.status.value,
+            booking_id=booking.id,
+            metadata={
+                "attention_case_id": case.id,
+                "booking_value": booking.booking_value,
+            },
+        )
+        self._record_priority_alert(
+            booking=booking,
+            alert_type=PriorityAlertType.HUMAN_REVIEW_REQUIRED,
+            message=(
+                "High-value recipient replied — approval required."
+                if plan.should_respond
+                else "High-value follow-up requires operator review."
+            ),
+        )
+        if drafted_response:
+            self.record_ai_log(
+                action_type=AIActionType.FOLLOWUP_DRAFTED,
+                reason_summary="Drafted a high-value follow-up for human review.",
+                result="awaiting_approval",
+                booking_id=booking.id,
+                metadata={"attention_case_id": case.id},
+            )
+        return case
+
+    def _record_approved_follow_up_events(
+        self,
+        action: RescueAction,
+        score: RescueScore,
+        recipient_name: str,
+    ) -> None:
+        timestamp = action.sent_at or datetime.now(timezone.utc)
+        shared_metadata = {
+            "action_id": action.id,
+            "intervention": action.intervention_type.value,
+            "target": action.target_type.value,
+        }
+        self._events.extend(
+            (
+                Event(
+                    id=f"event_{uuid4().hex[:12]}",
+                    booking_id=action.booking_id,
+                    event_type=EventType.RESCUE_TRIGGERED,
+                    timestamp=timestamp,
+                    metadata={
+                        **shared_metadata,
+                        "score": score.score,
+                        "explanation": action.reason_summary,
+                        "trigger_code": "human_approved_high_value_follow_up",
+                        "score_reasons": [
+                            reason.model_dump(mode="json") for reason in score.reasons
+                        ],
+                        "status": RescueActionStatus.SENT.value,
+                    },
+                ),
+                Event(
+                    id=f"event_{uuid4().hex[:12]}",
+                    booking_id=action.booking_id,
+                    event_type=EventType.SMS_GENERATED,
+                    timestamp=timestamp,
+                    metadata={
+                        **shared_metadata,
+                        "message_source": MessageSource.OPENAI.value,
+                        "generation_failure": None,
+                        "status": RescueActionStatus.GENERATED.value,
+                    },
+                ),
+                Event(
+                    id=f"event_{uuid4().hex[:12]}",
+                    booking_id=action.booking_id,
+                    event_type=EventType.SMS_SENT,
+                    timestamp=timestamp,
+                    metadata={
+                        **shared_metadata,
+                        "recipient_name": recipient_name,
+                        "demo_mode": True,
+                        "human_approved": True,
+                    },
+                ),
+            )
+        )
+
+    def _create_rescue_action(
+        self,
+        booking: Booking,
+        score: RescueScore,
+        recipient: Renter | Lister | None,
+        target_id: str | None,
+        *,
+        generation: MessageGenerationResult | None = None,
+        log_request: bool = True,
+    ) -> RescueAction:
+        if (
+            recipient is None
+            or target_id is None
+            or score.target is None
+            or score.recommended_intervention is None
+        ):
+            raise AIToolDeniedError("Required rescue context is missing.")
+
+        triggered_at = datetime.now(timezone.utc)
+        if booking.at_risk_at is None:
+            booking = booking.model_copy(update={"at_risk_at": triggered_at})
+            self._bookings[booking.id] = booking
+        action = RescueAction(
+            id=f"action_{uuid4().hex[:12]}",
+            run_id=self._run_id,
+            booking_id=booking.id,
+            score_at_trigger=score.score,
+            intervention_type=score.recommended_intervention,
+            target_type=score.target,
+            target_id=target_id,
+            reason_summary=score.explanation,
+            status=RescueActionStatus.PENDING,
+        )
+        self._rescue_actions.append(action)
+        self._events.append(
+            Event(
+                id=f"event_{uuid4().hex[:12]}",
+                booking_id=booking.id,
+                event_type=EventType.RESCUE_TRIGGERED,
+                timestamp=triggered_at,
+                metadata={
+                    "action_id": action.id,
+                    "score": score.score,
+                    "target": score.target.value,
+                    "intervention": score.recommended_intervention.value,
+                    "explanation": score.explanation,
+                    "trigger_code": score.trigger_code,
+                    "score_reasons": [
+                        reason.model_dump(mode="json") for reason in score.reasons
+                    ],
+                    "status": RescueActionStatus.PENDING.value,
+                },
+            )
+        )
+        generation = generation or self.messaging_service.generate(
+            self._message_context(booking, score)
+        )
+        generated_action = action.model_copy(
+            update={
+                "message_text": generation.message_text,
+                "message_source": generation.message_source,
+                "status": RescueActionStatus.GENERATED,
+            }
+        )
+        self._rescue_actions[-1] = generated_action
+        self._events.append(
+            Event(
+                id=f"event_{uuid4().hex[:12]}",
+                booking_id=booking.id,
+                event_type=EventType.SMS_GENERATED,
+                timestamp=datetime.now(timezone.utc),
+                metadata={
+                    "action_id": generated_action.id,
+                    "intervention": generated_action.intervention_type.value,
+                    "target": generated_action.target_type.value,
+                    "message_source": generation.message_source.value,
+                    "generation_failure": (
+                        generation.failure_code.value
+                        if generation.failure_code
+                        else None
+                    ),
+                    "status": RescueActionStatus.GENERATED.value,
+                },
+            )
+        )
+        if log_request:
+            self.record_ai_log(
+                action_type=AIActionType.SMS_REQUESTED,
+                reason_summary="Rescue SMS requested through the approved backend tool.",
+                result=generation.message_source.value,
+                booking_id=booking.id,
+                tool_name="send_rescue_sms",
+                tool_arguments_summary=(
+                    f"booking_id={booking.id}; "
+                    f"intervention_type={generated_action.intervention_type.value}"
+                ),
+                metadata={"action_id": generated_action.id},
+            )
+        response_plan = self._plan_response(generated_action, recipient)
+        delivery_thread = threading.Thread(
+            target=self._deliver_action,
+            args=(
+                self._run_id,
+                generated_action.id,
+                recipient.name,
+                response_plan,
+                self._cancel,
+            ),
+            name=f"delivery-{generated_action.id}",
+            daemon=True,
+        )
+        self._delivery_threads.append(delivery_thread)
+        delivery_thread.start()
+        return generated_action
 
     def _plan_response(
         self,
@@ -644,6 +1444,25 @@ class SimulationEngine:
                     },
                 )
             )
+            self.record_ai_log(
+                action_type=AIActionType.SMS_SENT,
+                reason_summary="Backend guardrails approved and demo-sent the rescue SMS.",
+                result="sent",
+                booking_id=action.booking_id,
+                tool_name="send_rescue_sms",
+                tool_arguments_summary=(
+                    f"booking_id={action.booking_id}; "
+                    f"intervention_type={action.intervention_type.value}"
+                ),
+                metadata={"action_id": action.id},
+            )
+            booking = self._bookings[action.booking_id]
+            if is_high_value(booking):
+                self._record_priority_alert(
+                    booking=booking,
+                    alert_type=PriorityAlertType.HIGH_VALUE_OUTREACH,
+                    message="First automated outreach sent for high-value booking.",
+                )
 
         if cancel.wait(self._scaled_delay(2.5)):
             return
@@ -653,11 +1472,22 @@ class SimulationEngine:
                 return
             action = self._rescue_actions[action_index]
             outcome_at = datetime.now(timezone.utc)
+            booking = self._bookings[action.booking_id]
+            high_value_follow_up = is_high_value(booking) and not any(
+                existing.booking_id == action.booking_id
+                and existing.id != action.id
+                and existing.status is RescueActionStatus.SENT
+                for existing in self._rescue_actions
+            )
             self._rescue_actions[action_index] = action.model_copy(
                 update={
                     "response_text": plan.response_text,
                     "response_at": outcome_at if plan.should_respond else None,
-                    "outcome": plan.outcome,
+                    "outcome": (
+                        RescueOutcome.STILL_AT_RISK
+                        if high_value_follow_up
+                        else plan.outcome
+                    ),
                 }
             )
             if plan.should_respond:
@@ -676,7 +1506,14 @@ class SimulationEngine:
                     )
                 )
 
-            booking = self._bookings[action.booking_id]
+            if high_value_follow_up:
+                self._create_high_value_follow_up_attention(
+                    action=self._rescue_actions[action_index],
+                    booking=booking,
+                    plan=plan,
+                )
+                return
+
             if plan.successful:
                 self._bookings[action.booking_id] = booking.model_copy(
                     update={
@@ -756,6 +1593,30 @@ class SimulationEngine:
                 )
             )
 
+    def _record_priority_alert(
+        self,
+        *,
+        booking: Booking,
+        alert_type: PriorityAlertType,
+        message: str,
+    ) -> None:
+        if self._run_id is None or self._status is not SimulationStatus.RUNNING:
+            return
+        alert_key = (alert_type, booking.id)
+        if alert_key in self._priority_alert_keys:
+            return
+        self._priority_alert_keys.add(alert_key)
+        self._priority_alerts.append(
+            PriorityAlert(
+                id=f"priority_alert_{uuid4().hex[:12]}",
+                run_id=self._run_id,
+                timestamp=datetime.now(timezone.utc),
+                booking_id=booking.id,
+                alert_type=alert_type,
+                message=message,
+            )
+        )
+
     def _action_index(self, run_id: str | None, action_id: str) -> int | None:
         if self._run_id != run_id or self._status is not SimulationStatus.RUNNING:
             return None
@@ -774,6 +1635,12 @@ class SimulationEngine:
     def _snapshot_locked(self) -> SimulationSnapshot:
         elapsed = self._elapsed_locked()
         progress = min(100.0, (elapsed / self.duration_seconds) * 100)
+        current_booking_ids = set(self._bookings)
+        current_actions = tuple(
+            action
+            for action in self._rescue_actions
+            if action.run_id == self._run_id and action.booking_id in current_booking_ids
+        )
         return SimulationSnapshot(
             run_id=self._run_id,
             seed=self._seed,
@@ -789,11 +1656,13 @@ class SimulationEngine:
             processed_planned_events=self._processed_planned_events,
             selected_journeys=self._journeys,
             bookings=tuple(self._bookings.values()),
-            events=tuple(self._events),
+            events=tuple(
+                event for event in self._events if event.booking_id in current_booking_ids
+            ),
             scores=dict(self._scores),
-            rescue_actions=tuple(self._rescue_actions),
+            rescue_actions=current_actions,
             analytics=calculate_analytics(
-                tuple(self._bookings.values()), self._rescue_actions
+                tuple(self._bookings.values()), current_actions
             ),
         )
 
@@ -1081,5 +1950,6 @@ def _looks_negative(response: str) -> bool:
 
 
 SIMULATION_ENGINE = SimulationEngine(
-    messaging_service=MessagingService.from_environment()
+    messaging_service=MessagingService.from_environment(),
+    ops_chat_service=OpsChatService.from_environment(),
 )

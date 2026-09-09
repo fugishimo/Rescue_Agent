@@ -1,4 +1,3 @@
-import json
 from datetime import date, datetime, timezone
 
 import pytest
@@ -16,10 +15,12 @@ from app.models import (
 )
 from app.services import messaging
 from app.services.messaging import (
+    DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENAI_TIMEOUT_SECONDS,
+    LLMMessageGenerator,
     GenerationFailureCode,
     MAX_SMS_CHARACTERS,
     MessagingService,
-    OpenAIResponsesMessageGenerator,
     RescueMessageContext,
     build_rescue_message_context,
     fallback_message,
@@ -189,31 +190,62 @@ def test_each_intervention_has_a_valid_deterministic_template(
     assert validate_message(message, context) == message
 
 
-def test_openai_generator_uses_responses_structured_output(monkeypatch) -> None:
+def test_llm_generator_uses_structured_output() -> None:
     captured: dict[str, object] = {}
 
-    class FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
+    class FakeLLMClient:
+        def generate_text(self, **kwargs) -> str:
+            captured.update(kwargs)
+            return '{"message": "Can you confirm?"}'
 
-        def json(self) -> dict[str, str]:
-            return {"output_text": json.dumps({"message": "Can you confirm?"})}
-
-    def fake_post(url: str, **kwargs):
-        captured["url"] = url
-        captured.update(kwargs)
-        return FakeResponse()
-
-    monkeypatch.setattr(messaging.httpx, "post", fake_post)
     context = make_context()
-    generator = OpenAIResponsesMessageGenerator(
+    generator = LLMMessageGenerator(
         api_key="test-key",
-        model="gpt-4o-mini",
+        model="gpt-test-model",
+        client=FakeLLMClient(),
     )
 
     assert generator.generate(context) == "Can you confirm?"
-    assert captured["url"] == "https://api.openai.com/v1/responses"
-    payload = captured["json"]
-    assert payload["input"] == context.model_dump_json()
-    assert payload["text"]["format"]["type"] == "json_schema"
-    assert payload["text"]["format"]["strict"] is True
+    assert captured["prompt"] == context.model_dump_json()
+    assert captured["system"] == messaging.SYSTEM_INSTRUCTIONS
+    assert captured["output_schema"]["additionalProperties"] is False
+    assert captured["max_tokens"] == 120
+
+
+def test_environment_uses_openai_key_and_default_model(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_TIMEOUT_SECONDS", raising=False)
+
+    missing_key = MessagingService.from_environment()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    configured = MessagingService.from_environment()
+
+    assert missing_key.generator is None
+    assert missing_key.unavailable_code is GenerationFailureCode.MISSING_API_KEY
+    assert isinstance(configured.generator, LLMMessageGenerator)
+    assert configured.generator.client.model == DEFAULT_OPENAI_MODEL
+    assert configured.generator.client.timeout_seconds == DEFAULT_OPENAI_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("value", ["", "not-a-number", "0", "-2"])
+def test_invalid_openai_timeout_uses_safe_default(monkeypatch, value: str) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", value)
+
+    configured = MessagingService.from_environment()
+
+    assert isinstance(configured.generator, LLMMessageGenerator)
+    assert configured.generator.client.timeout_seconds == DEFAULT_OPENAI_TIMEOUT_SECONDS
+
+
+def test_openai_timeout_can_be_configured(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", "35.5")
+
+    configured = MessagingService.from_environment()
+
+    assert isinstance(configured.generator, LLMMessageGenerator)
+    assert configured.generator.client.timeout_seconds == 35.5

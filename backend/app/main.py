@@ -3,6 +3,11 @@ import os
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import load_backend_environment
+
+
+load_backend_environment()
+
 from app.data.seed_data import (
     BOOKINGS,
     EVENTS,
@@ -12,10 +17,21 @@ from app.data.seed_data import (
     MarketplaceSeed,
     ProfileCatalog,
 )
-from app.models import Booking, Event, Listing
+from app.models import (
+    AIAgentLog,
+    AttentionCase,
+    Booking,
+    Event,
+    Listing,
+    OpsBriefResponse,
+    OpsChatRequest,
+    OpsChatResponse,
+)
 from app.services.analytics import ActivityResponse, build_activity_response
 from app.services.simulation import (
     SIMULATION_ENGINE,
+    AttentionActionDeniedError,
+    AttentionCaseNotFoundError,
     AutopilotRequest,
     SimulationAlreadyRunningError,
     SimulationSnapshot,
@@ -108,6 +124,98 @@ async def activity_state() -> ActivityResponse:
     return build_activity_response(
         list(snapshot.bookings), list(snapshot.events), list(snapshot.rescue_actions)
     )
+
+
+@app.get(
+    "/ops/brief",
+    response_model=OpsBriefResponse,
+    tags=["ai-ops"],
+)
+async def ops_brief() -> OpsBriefResponse:
+    """Return priority live alerts and the final completed-run brief."""
+    return SIMULATION_ENGINE.ops_brief_state()
+
+
+@app.post(
+    "/ops/chat",
+    response_model=OpsChatResponse,
+    tags=["ai-ops"],
+)
+def ops_chat(request: OpsChatRequest) -> OpsChatResponse:
+    """Answer an operations-only request through approved backend tools."""
+    return SIMULATION_ENGINE.ops_chat(request.message)
+
+
+@app.get(
+    "/ops/ai-log",
+    response_model=tuple[AIAgentLog, ...],
+    tags=["ai-ops"],
+)
+async def ai_agent_log() -> tuple[AIAgentLog, ...]:
+    """Return newest-first operational AI actions without hidden reasoning."""
+    return SIMULATION_ENGINE.ai_logs()
+
+
+@app.get(
+    "/ops/attention",
+    response_model=tuple[AttentionCase, ...],
+    tags=["ai-ops"],
+)
+async def attention_cases() -> tuple[AttentionCase, ...]:
+    """Return newest-first cases requiring AI approval or human handling."""
+    return SIMULATION_ENGINE.attention_cases()
+
+
+@app.get(
+    "/ops/high-value",
+    response_model=tuple[Booking, ...],
+    tags=["ai-ops"],
+)
+async def high_value_bookings() -> tuple[Booking, ...]:
+    """Return current bookings classified as high value by backend policy."""
+    return SIMULATION_ENGINE.high_value_bookings()
+
+
+@app.post(
+    "/ops/attention/{case_id}/approve",
+    response_model=AttentionCase,
+    tags=["ai-ops"],
+)
+async def approve_attention_case(case_id: str) -> AttentionCase:
+    """Revalidate and send one human-approved high-value AI follow-up."""
+    try:
+        return SIMULATION_ENGINE.approve_attention_case(case_id)
+    except AttentionCaseNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+    except AttentionActionDeniedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+
+
+@app.post(
+    "/ops/attention/{case_id}/human-rescue",
+    response_model=AttentionCase,
+    tags=["ai-ops"],
+)
+async def human_rescue_attention_case(case_id: str) -> AttentionCase:
+    """Transfer an active attention case to human ownership."""
+    try:
+        return SIMULATION_ENGINE.human_rescue_attention_case(case_id)
+    except AttentionCaseNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+    except AttentionActionDeniedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
 
 
 @app.post(

@@ -68,6 +68,7 @@ export interface MarketplaceEvent {
 
 export interface RescueAction {
   id: string;
+  run_id: string | null;
   booking_id: string;
   intervention_type: string;
   target_type: Exclude<RescueTarget, null>;
@@ -96,11 +97,20 @@ export interface SimulationSnapshot {
   progress_percent: number;
   total_planned_events: number;
   processed_planned_events: number;
+  selected_journeys: SelectedJourney[];
   bookings: Booking[];
   events: MarketplaceEvent[];
   scores: Record<string, RescueScore>;
   rescue_actions: RescueAction[];
   analytics: RescueAnalytics;
+}
+
+export interface SelectedJourney {
+  booking_id: string;
+  scenario: string;
+  renter_id: string;
+  lister_id: string;
+  listing_id: string;
 }
 
 export interface RescueAnalytics {
@@ -151,6 +161,85 @@ export interface ActivityRecord {
 export interface ActivityResponse {
   analytics: RescueAnalytics;
   records: ActivityRecord[];
+}
+
+export interface AIAgentLog {
+  id: string;
+  run_id: string | null;
+  timestamp: string;
+  booking_id: string | null;
+  action_type: string;
+  reason_summary: string;
+  tool_name: string | null;
+  tool_arguments_summary: string | null;
+  result: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface AttentionCase {
+  id: string;
+  booking_id: string;
+  reason: string;
+  priority: string;
+  high_value: boolean;
+  status: "needs_attention" | "awaiting_approval" | "human_handling" | "resolved";
+  created_at: string;
+  first_sms_action_id: string | null;
+  latest_reply: string | null;
+  drafted_response: string | null;
+  ai_recommendation: string;
+  human_decision: "approve_ai" | "human_rescue" | null;
+  resolved_at: string | null;
+}
+
+export interface PriorityAlert {
+  id: string;
+  run_id: string;
+  timestamp: string;
+  booking_id: string;
+  alert_type: "high_value_risk" | "high_value_outreach" | "human_review_required";
+  priority: string;
+  message: string;
+}
+
+export interface OpsBrief {
+  run_id: string;
+  generated_at: string;
+  journeys_monitored: number;
+  interventions_sent: number;
+  bookings_rescued: number;
+  gmv_rescued: number;
+  high_value_cases: number;
+  unresolved_cases: number;
+  needs_attention_count: number;
+  attention_case_ids: string[];
+  summary: string;
+}
+
+export interface OpsBriefResponse {
+  run_id: string | null;
+  run_status: string;
+  brief: OpsBrief | null;
+  priority_alerts: PriorityAlert[];
+}
+
+export interface OpsChatToolResult {
+  tool_name: string;
+  result: string;
+  data: unknown;
+}
+
+export interface OpsChatMessage {
+  id: string;
+  timestamp: string;
+  role: "user" | "assistant";
+  content: string;
+  tool_calls: OpsChatToolResult[];
+}
+
+export interface OpsChatResponse {
+  run_id: string | null;
+  message: OpsChatMessage;
 }
 
 export interface MarketplaceSeed {

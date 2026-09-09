@@ -1,4 +1,13 @@
-import type { ActivityResponse, MarketplaceSeed, SimulationSnapshot } from "./types";
+import type {
+  ActivityResponse,
+  AIAgentLog,
+  AttentionCase,
+  Booking,
+  MarketplaceSeed,
+  OpsBriefResponse,
+  OpsChatResponse,
+  SimulationSnapshot,
+} from "./types";
 
 const API_BASE_URL =
   (
@@ -33,6 +42,41 @@ export function getDashboard() {
 
 export function getActivity() {
   return request<ActivityResponse>("/activity", { cache: "no-store" });
+}
+
+export function getAIAgentLog() {
+  return request<AIAgentLog[]>("/ops/ai-log", { cache: "no-store" });
+}
+
+export function getAttentionCases() {
+  return request<AttentionCase[]>("/ops/attention", { cache: "no-store" });
+}
+
+export function getHighValueBookings() {
+  return request<Booking[]>("/ops/high-value", { cache: "no-store" });
+}
+
+export function getOpsBrief() {
+  return request<OpsBriefResponse>("/ops/brief", { cache: "no-store" });
+}
+
+export function sendOpsChat(message: string) {
+  return request<OpsChatResponse>("/ops/chat", {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
+
+export function approveAIFollowUp(caseId: string) {
+  return request<AttentionCase>(`/ops/attention/${caseId}/approve`, {
+    method: "POST",
+  });
+}
+
+export function selectHumanRescue(caseId: string) {
+  return request<AttentionCase>(`/ops/attention/${caseId}/human-rescue`, {
+    method: "POST",
+  });
 }
 
 export function startSimulation() {

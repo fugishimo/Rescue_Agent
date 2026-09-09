@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-import { getActivity } from "@/lib/api";
-import type { ActivityRecord, ActivityResponse } from "@/lib/types";
+import { getActivity, getAIAgentLog } from "@/lib/api";
+import type { ActivityRecord, ActivityResponse, AIAgentLog } from "@/lib/types";
 
 import styles from "./rescue-activity.module.css";
 
@@ -28,13 +28,19 @@ function time(timestamp: string) {
 
 export function RescueActivity() {
   const [data, setData] = useState<ActivityResponse | null>(null);
+  const [aiLogs, setAILogs] = useState<AIAgentLog[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
-      setData(await getActivity());
+      const [activity, agentLog] = await Promise.all([
+        getActivity(),
+        getAIAgentLog(),
+      ]);
+      setData(activity);
+      setAILogs(agentLog);
       setError(null);
     } catch {
       setError("The rescue audit API is unavailable.");
@@ -127,6 +133,35 @@ export function RescueActivity() {
             <strong>No interventions logged yet</strong>
             <p>Start the live simulation to create an inspectable Rescue Agent record.</p>
             <Link href="/dashboard">Open live console</Link>
+          </div>
+        )}
+      </section>
+      <section className={`${styles.ledger} ${styles.agentLedger}`}>
+        <div className={styles.ledgerHeading}>
+          <div><p>AI OPERATIONS</p><h2>AI Agent Log</h2></div>
+          <span>{aiLogs.length} this run</span>
+        </div>
+        <div className={styles.tableWrap}>
+          <table className={styles.agentTable}>
+            <thead><tr><th>Time</th><th>Booking</th><th>AI Action</th><th>Reason</th><th>Tool</th><th>Result</th></tr></thead>
+            <tbody>
+              {aiLogs.map((entry) => (
+                <tr key={entry.id}>
+                  <td><time dateTime={entry.timestamp}>{time(entry.timestamp)}</time></td>
+                  <td>{entry.booking_id ? data?.records.find((record) => record.booking_id === entry.booking_id)?.booking_label ?? entry.booking_id : "Marketplace"}</td>
+                  <td><strong>{words(entry.action_type)}</strong></td>
+                  <td>{entry.reason_summary}</td>
+                  <td>{entry.tool_name ? words(entry.tool_name) : "—"}</td>
+                  <td><span className={styles.logResult} data-result={entry.result}>{words(entry.result)}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {!loading && !aiLogs.length && (
+          <div className={styles.agentEmpty}>
+            <strong>No AI operations logged yet</strong>
+            <p>Approved AI tool activity will appear here during a simulation.</p>
           </div>
         )}
       </section>
