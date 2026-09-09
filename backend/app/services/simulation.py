@@ -28,6 +28,9 @@ from app.models import (
     MessageSource,
     OpsBrief,
     OpsBriefResponse,
+    OpsChatMessage,
+    OpsChatResponse,
+    OpsChatRole,
     PriorityAlert,
     PriorityAlertType,
     Renter,
@@ -51,6 +54,7 @@ from app.services.messaging import (
     validate_message,
 )
 from app.services.ops_brief import build_ops_brief
+from app.services.ops_chat import OpsChatService, OpsEntity
 from app.services.rescue_rules import (
     GuardrailCode,
     RescueRuleDecision,
@@ -121,6 +125,9 @@ class AttentionCaseNotFoundError(RuntimeError):
 
 class AttentionActionDeniedError(RuntimeError):
     pass
+
+
+_UNSCOPED_TOOL_CALL = object()
 
 
 @dataclass(frozen=True)
@@ -195,6 +202,7 @@ class SimulationEngine:
         duration_seconds: float = 90,
         speed_multiplier: int = 30,
         messaging_service: MessagingService | None = None,
+        ops_chat_service: OpsChatService | None = None,
     ):
         if duration_seconds <= 0:
             raise ValueError("duration_seconds must be positive")
@@ -204,6 +212,7 @@ class SimulationEngine:
         self.duration_seconds = duration_seconds
         self.speed_multiplier = speed_multiplier
         self.messaging_service = messaging_service or MessagingService()
+        self.ops_chat_service = ops_chat_service or OpsChatService()
         self._lock = threading.RLock()
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
@@ -229,6 +238,7 @@ class SimulationEngine:
         self._ops_brief: OpsBrief | None = None
         self._priority_alerts: list[PriorityAlert] = []
         self._priority_alert_keys: set[tuple[PriorityAlertType, str]] = set()
+        self._ops_chat_messages: list[OpsChatMessage] = []
         self._human_owned_booking_ids: set[str] = set()
         self._held_triggers: set[tuple[str, str]] = set()
         self._ai_tools = AIToolDispatcher(self)
@@ -267,6 +277,7 @@ class SimulationEngine:
             self._ops_brief = None
             self._priority_alerts = []
             self._priority_alert_keys = set()
+            self._ops_chat_messages = []
             self._human_owned_booking_ids = set()
             self._held_triggers = set()
             for booking_id in self._bookings:
@@ -314,6 +325,7 @@ class SimulationEngine:
             self._ops_brief = None
             self._priority_alerts = []
             self._priority_alert_keys = set()
+            self._ops_chat_messages = []
             self._human_owned_booking_ids = set()
             self._held_triggers = set()
             return self._snapshot_locked()
@@ -332,7 +344,9 @@ class SimulationEngine:
 
     def ai_logs(self) -> tuple[AIAgentLog, ...]:
         with self._lock:
-            return tuple(reversed(self._ai_logs))
+            return tuple(
+                log for log in reversed(self._ai_logs) if log.run_id == self._run_id
+            )
 
     def attention_cases(self) -> tuple[AttentionCase, ...]:
         with self._lock:
@@ -340,6 +354,7 @@ class SimulationEngine:
                 case
                 for case in reversed(self._attention_cases)
                 if case.status is not AttentionStatus.RESOLVED
+                and case.booking_id in self._bookings
             )
 
     def high_value_bookings(self) -> tuple[Booking, ...]:
@@ -364,6 +379,87 @@ class SimulationEngine:
                 brief=self._ops_brief,
                 priority_alerts=tuple(reversed(self._priority_alerts)),
             )
+
+    def ops_chat(self, message: str) -> OpsChatResponse:
+        normalized = " ".join(message.split())
+        with self._lock:
+            run_id = self._run_id
+            user_message = OpsChatMessage(
+                id=f"ops_chat_{uuid4().hex[:12]}",
+                timestamp=datetime.now(timezone.utc),
+                role=OpsChatRole.USER,
+                content=normalized,
+            )
+            self._ops_chat_messages.append(user_message)
+            entities = self._ops_chat_entities_locked()
+
+        turn = self.ops_chat_service.respond(
+            normalized,
+            lambda tool_name, arguments: self.dispatch_ai_tool(
+                tool_name,
+                arguments,
+                expected_run_id=run_id,
+            ),
+            entities,
+        )
+        assistant_message = OpsChatMessage(
+            id=f"ops_chat_{uuid4().hex[:12]}",
+            timestamp=datetime.now(timezone.utc),
+            role=OpsChatRole.ASSISTANT,
+            content=turn.content,
+            tool_calls=turn.tool_results,
+        )
+        with self._lock:
+            if self._run_id != run_id:
+                return OpsChatResponse(
+                    run_id=self._run_id,
+                    message=assistant_message.model_copy(
+                        update={
+                            "content": (
+                                "The simulation run changed while I was checking. "
+                                "Please ask again for the current run."
+                            ),
+                            "tool_calls": (),
+                        }
+                    )
+                )
+            self._ops_chat_messages.append(assistant_message)
+        return OpsChatResponse(run_id=run_id, message=assistant_message)
+
+    def _ops_chat_entities_locked(self) -> tuple[OpsEntity, ...]:
+        grouped: dict[tuple[str, str], dict[str, object]] = {}
+        renters = {renter.id: renter for renter in RENTERS}
+        listers = {lister.id: lister for lister in LISTERS}
+        listings = {listing.id: listing for listing in LISTINGS}
+        for booking in self._bookings.values():
+            renter = renters[booking.renter_id]
+            lister = listers[booking.lister_id]
+            listing = listings[booking.listing_id]
+            for kind, entity_id, name in (
+                ("renter", renter.id, renter.name),
+                ("lister", lister.id, lister.name),
+                ("listing", listing.id, listing.name),
+            ):
+                record = grouped.setdefault(
+                    (kind, entity_id),
+                    {"name": name, "booking_ids": []},
+                )
+                booking_ids = record["booking_ids"]
+                if isinstance(booking_ids, list):
+                    booking_ids.append(booking.id)
+            grouped[("booking", booking.id)] = {
+                "name": f"{renter.name} → {listing.name} ({booking.id})",
+                "booking_ids": [booking.id],
+            }
+        return tuple(
+            OpsEntity(
+                kind=kind,
+                id=entity_id,
+                name=str(record["name"]),
+                booking_ids=tuple(str(value) for value in record["booking_ids"]),
+            )
+            for (kind, entity_id), record in grouped.items()
+        )
 
     def approve_attention_case(self, case_id: str) -> AttentionCase:
         with self._lock:
@@ -426,6 +522,7 @@ class SimulationEngine:
             sent_at = datetime.now(timezone.utc)
             action = RescueAction(
                 id=f"action_{uuid4().hex[:12]}",
+                run_id=self._run_id,
                 booking_id=booking.id,
                 score_at_trigger=score.score,
                 intervention_type=score.recommended_intervention,
@@ -496,6 +593,7 @@ class SimulationEngine:
         with self._lock:
             entry = AIAgentLog(
                 id=f"ai_log_{uuid4().hex[:12]}",
+                run_id=self._run_id,
                 timestamp=datetime.now(timezone.utc),
                 booking_id=booking_id,
                 action_type=action_type,
@@ -512,8 +610,18 @@ class SimulationEngine:
         self,
         tool_name: str,
         arguments: dict[str, object] | None = None,
+        *,
+        expected_run_id: str | None | object = _UNSCOPED_TOOL_CALL,
     ) -> AIToolDispatchResult:
-        return self._ai_tools.dispatch(tool_name, arguments)
+        with self._lock:
+            if (
+                expected_run_id is not _UNSCOPED_TOOL_CALL
+                and self._run_id != expected_run_id
+            ):
+                raise AIToolDeniedError(
+                    "The simulation run changed; current-run data must be requested again."
+                )
+            return self._ai_tools.dispatch(tool_name, arguments)
 
     def send_ai_rescue_sms(
         self,
@@ -1133,6 +1241,7 @@ class SimulationEngine:
             self._bookings[booking.id] = booking
         action = RescueAction(
             id=f"action_{uuid4().hex[:12]}",
+            run_id=self._run_id,
             booking_id=booking.id,
             score_at_trigger=score.score,
             intervention_type=score.recommended_intervention,
@@ -1516,6 +1625,12 @@ class SimulationEngine:
     def _snapshot_locked(self) -> SimulationSnapshot:
         elapsed = self._elapsed_locked()
         progress = min(100.0, (elapsed / self.duration_seconds) * 100)
+        current_booking_ids = set(self._bookings)
+        current_actions = tuple(
+            action
+            for action in self._rescue_actions
+            if action.run_id == self._run_id and action.booking_id in current_booking_ids
+        )
         return SimulationSnapshot(
             run_id=self._run_id,
             seed=self._seed,
@@ -1531,11 +1646,13 @@ class SimulationEngine:
             processed_planned_events=self._processed_planned_events,
             selected_journeys=self._journeys,
             bookings=tuple(self._bookings.values()),
-            events=tuple(self._events),
+            events=tuple(
+                event for event in self._events if event.booking_id in current_booking_ids
+            ),
             scores=dict(self._scores),
-            rescue_actions=tuple(self._rescue_actions),
+            rescue_actions=current_actions,
             analytics=calculate_analytics(
-                tuple(self._bookings.values()), self._rescue_actions
+                tuple(self._bookings.values()), current_actions
             ),
         )
 
@@ -1823,5 +1940,6 @@ def _looks_negative(response: str) -> bool:
 
 
 SIMULATION_ENGINE = SimulationEngine(
-    messaging_service=MessagingService.from_environment()
+    messaging_service=MessagingService.from_environment(),
+    ops_chat_service=OpsChatService.from_environment(),
 )

@@ -38,6 +38,7 @@ class RescueOutcome(StrEnum):
 
 class RescueAction(DomainModel):
     id: str
+    run_id: str | None = None
     booking_id: str
     score_at_trigger: int = Field(ge=0, le=100)
     intervention_type: InterventionType

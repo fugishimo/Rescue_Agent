@@ -24,6 +24,8 @@ from app.models import (
     Event,
     Listing,
     OpsBriefResponse,
+    OpsChatRequest,
+    OpsChatResponse,
 )
 from app.services.analytics import ActivityResponse, build_activity_response
 from app.services.simulation import (
@@ -132,6 +134,16 @@ async def activity_state() -> ActivityResponse:
 async def ops_brief() -> OpsBriefResponse:
     """Return priority live alerts and the final completed-run brief."""
     return SIMULATION_ENGINE.ops_brief_state()
+
+
+@app.post(
+    "/ops/chat",
+    response_model=OpsChatResponse,
+    tags=["ai-ops"],
+)
+def ops_chat(request: OpsChatRequest) -> OpsChatResponse:
+    """Answer an operations-only request through approved backend tools."""
+    return SIMULATION_ENGINE.ops_chat(request.message)
 
 
 @app.get(

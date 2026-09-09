@@ -5,7 +5,8 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.data.profiles import LISTERS
+from app.data.profiles import LISTERS, RENTERS
+from app.data.seed_data import LISTINGS
 from app.models import (
     BookingStatus,
     AIActionType,
@@ -254,10 +255,23 @@ class AIToolDispatcher:
         return _booking_payload(snapshot, booking_id)
 
     def _recent_rescue_actions(self, _: _StrictArguments) -> list[dict[str, object]]:
-        return [
-            action.model_dump(mode="json")
-            for action in reversed(self.backend.snapshot().rescue_actions[-20:])
+        snapshot = self.backend.snapshot()
+        actions: list[dict[str, object]] = []
+        current_actions = [
+            action
+            for action in snapshot.rescue_actions
+            if action.run_id == snapshot.run_id
         ]
+        for action in reversed(current_actions[-20:]):
+            payload = action.model_dump(mode="json")
+            participants = RENTERS if action.target_type.value == "renter" else LISTERS
+            participant = next(
+                (item for item in participants if item.id == action.target_id),
+                None,
+            )
+            payload["target_name"] = participant.name if participant else action.target_id
+            actions.append(payload)
+        return actions
 
     def _high_value_cases(self, _: _StrictArguments) -> list[dict[str, object]]:
         snapshot = self.backend.snapshot()
@@ -269,17 +283,21 @@ class AIToolDispatcher:
 
     def _lister_performance(self, _: _StrictArguments) -> list[dict[str, object]]:
         snapshot = self.backend.snapshot()
+        current_lister_ids = {booking.lister_id for booking in snapshot.bookings}
         return [
             {
+                "run_id": snapshot.run_id,
                 "lister_id": lister.id,
                 "name": lister.name,
                 "average_response_minutes": lister.average_response_minutes,
                 "acceptance_rate": lister.acceptance_rate,
                 "rescue_actions": sum(
-                    action.target_id == lister.id for action in snapshot.rescue_actions
+                    action.run_id == snapshot.run_id and action.target_id == lister.id
+                    for action in snapshot.rescue_actions
                 ),
             }
             for lister in LISTERS
+            if lister.id in current_lister_ids
         ]
 
     def _renter_history(self, arguments: _StrictArguments) -> dict[str, object]:
@@ -297,8 +315,12 @@ class AIToolDispatcher:
             raise AIToolDeniedError("Participant has no current marketplace history.")
         booking_ids = {booking.id for booking in bookings}
         return {
+            "run_id": snapshot.run_id,
             field: participant_id,
             "bookings": [booking.model_dump(mode="json") for booking in bookings],
+            "booking_details": [
+                _booking_payload(snapshot, booking.id) for booking in bookings
+            ],
             "events": [
                 event.model_dump(mode="json")
                 for event in snapshot.events
@@ -307,13 +329,16 @@ class AIToolDispatcher:
             "rescue_actions": [
                 action.model_dump(mode="json")
                 for action in snapshot.rescue_actions
-                if action.booking_id in booking_ids
+                if action.run_id == snapshot.run_id and action.booking_id in booking_ids
             ],
         }
 
     def _attention_cases(self, _: _StrictArguments) -> list[dict[str, object]]:
+        snapshot = self.backend.snapshot()
         return [
-            case.model_dump(mode="json") for case in self.backend.attention_cases()
+            {"run_id": snapshot.run_id, **case.model_dump(mode="json")}
+            for case in self.backend.attention_cases()
+            if any(booking.id == case.booking_id for booking in snapshot.bookings)
         ]
 
     def _send_rescue_sms(self, arguments: _StrictArguments) -> dict[str, object]:
@@ -352,9 +377,26 @@ class AIToolDispatcher:
 def _booking_payload(snapshot: Any, booking_id: str) -> dict[str, object]:
     booking = next(booking for booking in snapshot.bookings if booking.id == booking_id)
     score = snapshot.scores.get(booking_id)
+    renter = next((item for item in RENTERS if item.id == booking.renter_id), None)
+    lister = next((item for item in LISTERS if item.id == booking.lister_id), None)
+    listing = next((item for item in LISTINGS if item.id == booking.listing_id), None)
     return {
+        "run_id": snapshot.run_id,
         "booking": booking.model_dump(mode="json"),
         "rescue_score": score.model_dump(mode="json") if score else None,
+        "renter_name": renter.name if renter else booking.renter_id,
+        "lister_name": lister.name if lister else booking.lister_id,
+        "listing_name": listing.name if listing else booking.listing_id,
+        "events": [
+            event.model_dump(mode="json")
+            for event in snapshot.events
+            if event.booking_id == booking_id
+        ],
+        "rescue_actions": [
+            action.model_dump(mode="json")
+            for action in snapshot.rescue_actions
+            if action.run_id == snapshot.run_id and action.booking_id == booking_id
+        ],
     }
 
 
@@ -387,6 +429,10 @@ def _arguments_summary(arguments: _StrictArguments) -> str | None:
     values: list[str] = []
     if booking_id := getattr(arguments, "booking_id", None):
         values.append(f"booking_id={booking_id}")
+    if renter_id := getattr(arguments, "renter_id", None):
+        values.append(f"renter_id={renter_id}")
+    if lister_id := getattr(arguments, "lister_id", None):
+        values.append(f"lister_id={lister_id}")
     if intervention := getattr(arguments, "intervention_type", None):
         values.append(f"intervention_type={intervention.value}")
     if hasattr(arguments, "enabled"):

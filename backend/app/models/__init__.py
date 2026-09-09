@@ -10,6 +10,13 @@ from app.models.ops_brief import (
     PriorityAlert,
     PriorityAlertType,
 )
+from app.models.ops_chat import (
+    OpsChatMessage,
+    OpsChatRequest,
+    OpsChatResponse,
+    OpsChatRole,
+    OpsChatToolResult,
+)
 from app.models.renter import Renter
 from app.models.rescue_action import (
     InterventionType,
@@ -37,6 +44,11 @@ __all__ = [
     "MessageSource",
     "OpsBrief",
     "OpsBriefResponse",
+    "OpsChatMessage",
+    "OpsChatRequest",
+    "OpsChatResponse",
+    "OpsChatRole",
+    "OpsChatToolResult",
     "PriorityAlert",
     "PriorityAlertType",
     "Renter",

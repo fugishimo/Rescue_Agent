@@ -24,6 +24,7 @@ class AIActionType(StrEnum):
 
 class AIAgentLog(DomainModel):
     id: str
+    run_id: str | None = None
     timestamp: datetime
     booking_id: str | None = None
     action_type: AIActionType

@@ -5,6 +5,7 @@ import type {
   Booking,
   MarketplaceSeed,
   OpsBriefResponse,
+  OpsChatResponse,
   SimulationSnapshot,
 } from "./types";
 
@@ -57,6 +58,13 @@ export function getHighValueBookings() {
 
 export function getOpsBrief() {
   return request<OpsBriefResponse>("/ops/brief", { cache: "no-store" });
+}
+
+export function sendOpsChat(message: string) {
+  return request<OpsChatResponse>("/ops/chat", {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
 }
 
 export function approveAIFollowUp(caseId: string) {

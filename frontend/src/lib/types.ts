@@ -68,6 +68,7 @@ export interface MarketplaceEvent {
 
 export interface RescueAction {
   id: string;
+  run_id: string | null;
   booking_id: string;
   intervention_type: string;
   target_type: Exclude<RescueTarget, null>;
@@ -164,6 +165,7 @@ export interface ActivityResponse {
 
 export interface AIAgentLog {
   id: string;
+  run_id: string | null;
   timestamp: string;
   booking_id: string | null;
   action_type: string;
@@ -219,6 +221,25 @@ export interface OpsBriefResponse {
   run_status: string;
   brief: OpsBrief | null;
   priority_alerts: PriorityAlert[];
+}
+
+export interface OpsChatToolResult {
+  tool_name: string;
+  result: string;
+  data: unknown;
+}
+
+export interface OpsChatMessage {
+  id: string;
+  timestamp: string;
+  role: "user" | "assistant";
+  content: string;
+  tool_calls: OpsChatToolResult[];
+}
+
+export interface OpsChatResponse {
+  run_id: string | null;
+  message: OpsChatMessage;
 }
 
 export interface MarketplaceSeed {

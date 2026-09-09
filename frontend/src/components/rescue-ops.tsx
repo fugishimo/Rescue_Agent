@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   approveAIFollowUp,
@@ -12,6 +12,7 @@ import {
   getMarketplaceSeed,
   getOpsBrief,
   selectHumanRescue,
+  sendOpsChat,
 } from "@/lib/api";
 import type {
   AIAgentLog,
@@ -19,6 +20,7 @@ import type {
   Booking,
   MarketplaceSeed,
   OpsBriefResponse,
+  OpsChatMessage,
   RescueAction,
   SimulationSnapshot,
 } from "@/lib/types";
@@ -47,6 +49,12 @@ function latestAction(actions: RescueAction[], bookingId: string) {
   return [...actions].reverse().find((action) => action.booking_id === bookingId);
 }
 
+const suggestedPrompts = [
+  "Show me high-value cases.",
+  "What did you handle during this run?",
+  "Which booking is most at risk?",
+];
+
 export function RescueOps() {
   const [seed, setSeed] = useState<MarketplaceSeed | null>(null);
   const [snapshot, setSnapshot] = useState<SimulationSnapshot | null>(null);
@@ -54,9 +62,14 @@ export function RescueOps() {
   const [agentLog, setAgentLog] = useState<AIAgentLog[]>([]);
   const [highValue, setHighValue] = useState<Booking[]>([]);
   const [opsBrief, setOpsBrief] = useState<OpsBriefResponse | null>(null);
+  const [chatMessages, setChatMessages] = useState<OpsChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatPending, setChatPending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingCaseId, setPendingCaseId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const activeRunId = useRef<string | null | undefined>(undefined);
 
   const load = useCallback(async () => {
     try {
@@ -68,6 +81,15 @@ export function RescueOps() {
         getHighValueBookings(),
         getOpsBrief(),
       ]);
+      if (
+        activeRunId.current !== undefined
+        && activeRunId.current !== dashboard.run_id
+      ) {
+        setChatMessages([]);
+        setChatError(null);
+        setChatInput("");
+      }
+      activeRunId.current = dashboard.run_id;
       setSeed(marketplace);
       setSnapshot(dashboard);
       setAttention(cases);
@@ -124,6 +146,45 @@ export function RescueOps() {
     } finally {
       setPendingCaseId(null);
     }
+  }
+
+  async function askRescueAgent(message: string) {
+    const content = message.trim();
+    if (!content || chatPending) return;
+    const userMessage: OpsChatMessage = {
+      id: `local-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      role: "user",
+      content,
+      tool_calls: [],
+    };
+    setChatMessages((current) => [...current, userMessage]);
+    setChatInput("");
+    setChatPending(true);
+    setChatError(null);
+    try {
+      const response = await sendOpsChat(content);
+      if (
+        activeRunId.current === undefined
+        || response.run_id === activeRunId.current
+      ) {
+        activeRunId.current = response.run_id;
+        setChatMessages((current) => [...current, response.message]);
+      } else {
+        setChatMessages([]);
+        setChatError("The simulation run changed. Ask again for the current run.");
+      }
+      await load();
+    } catch {
+      setChatError("Rescue Agent could not complete that operations request.");
+    } finally {
+      setChatPending(false);
+    }
+  }
+
+  function submitChat(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void askRescueAgent(chatInput);
   }
 
   const finalBrief = opsBrief?.brief;
@@ -347,20 +408,56 @@ export function RescueOps() {
       </section>
 
       <section className={styles.section} aria-labelledby="ask-title">
-        <SectionHeading id="ask-title" eyebrow="OPERATIONS ASSISTANT" title="Ask Rescue Agent" detail="Coming online soon" />
+        <SectionHeading id="ask-title" eyebrow="OPERATIONS ASSISTANT" title="Ask Rescue Agent" detail="Operations only" />
         <div className={styles.askPanel}>
           <div>
             <strong>Operations-only assistance</strong>
             <p>Ask about booking risk, interventions, marketplace activity, and cases that need attention.</p>
           </div>
-          <form onSubmit={(event) => event.preventDefault()}>
-            <input disabled aria-label="Ask Rescue Agent" placeholder="What needs my attention right now?" />
-            <button disabled type="submit">Ask Rescue Agent</button>
+          <div className={styles.chatTranscript} aria-live="polite">
+            {chatMessages.length ? chatMessages.map((message) => (
+              <article className={styles.chatMessage} data-role={message.role} key={message.id}>
+                <span>{message.role === "assistant" ? "Rescue Agent" : "Operator"}</span>
+                <p>{message.content}</p>
+                {message.tool_calls.length ? (
+                  <div className={styles.toolResults}>
+                    {message.tool_calls.map((tool, index) => (
+                      <span data-result={tool.result} key={`${tool.tool_name}-${index}`}>
+                        {words(tool.tool_name)} · {words(tool.result)}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </article>
+            )) : (
+              <p className={styles.chatEmpty}>No operations questions asked yet.</p>
+            )}
+            {chatPending && <p className={styles.chatPending}>Rescue Agent is checking approved tools…</p>}
+          </div>
+          {chatError && <p className={styles.chatError} role="alert">{chatError}</p>}
+          <form onSubmit={submitChat}>
+            <input
+              aria-label="Ask Rescue Agent"
+              disabled={chatPending}
+              onChange={(event) => setChatInput(event.target.value)}
+              placeholder="What needs my attention right now?"
+              value={chatInput}
+            />
+            <button disabled={chatPending || !chatInput.trim()} type="submit">
+              {chatPending ? "Checking…" : "Ask Rescue Agent"}
+            </button>
           </form>
           <div className={styles.prompts}>
-            <span>Show me high-value cases</span>
-            <span>What did you handle?</span>
-            <span>Which booking is most at risk?</span>
+            {suggestedPrompts.map((prompt) => (
+              <button
+                disabled={chatPending}
+                key={prompt}
+                onClick={() => void askRescueAgent(prompt)}
+                type="button"
+              >
+                {prompt}
+              </button>
+            ))}
           </div>
         </div>
       </section>
