@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.data.profiles import LISTERS, RENTERS
 from app.data.seed_data import LISTINGS
 from app.main import app
-from app.models import AIActionType, OpsChatToolResult
+from app.models import AIActionType, OpsChatToolResult, RescueOutcome
 from app.services.ops_chat import (
     LLMOpsChatPlanner,
     OUT_OF_DOMAIN_RESPONSE,
@@ -461,6 +462,9 @@ def test_current_run_action_queries_handle_zero_one_and_multiple_interventions()
     zero = zero_engine.start(seed=0)
     zero_response = zero_engine.ops_chat("What did you handle during this run?")
     assert zero_response.message.tool_calls[0].data == []
+    assert zero_response.message.content == (
+        "No rescue interventions were sent during this run."
+    )
     assert zero_engine.snapshot().run_id == zero.run_id
     zero_engine.reset()
 
@@ -473,7 +477,109 @@ def test_current_run_action_queries_handle_zero_one_and_multiple_interventions()
         assert len(snapshot.rescue_actions) == expected_count
         assert len(actions) == expected_count
         assert {action["run_id"] for action in actions} == {snapshot.run_id}
+        assert response.message.content.startswith(
+            f"I handled {expected_count} rescue "
+        )
+        assert response.message.content.count("\n- ") == expected_count
+        for action in snapshot.rescue_actions:
+            booking = next(
+                item for item in snapshot.bookings if item.id == action.booking_id
+            )
+            renter = next(item for item in RENTERS if item.id == booking.renter_id)
+            listing = next(item for item in LISTINGS if item.id == booking.listing_id)
+            recipients = RENTERS if action.target_type.value == "renter" else LISTERS
+            recipient = next(item for item in recipients if item.id == action.target_id)
+            assert renter.name in response.message.content
+            assert listing.name in response.message.content
+            assert recipient.name in response.message.content
+            assert action.intervention_type.value.replace("_", " ").lower() in (
+                response.message.content
+            )
+            assert action.reason_summary.rstrip(".") in response.message.content
+            assert action.outcome.value.replace("_", " ") in response.message.content
         engine.reset()
+
+
+def test_run_recap_includes_three_or_more_actions_without_truncation() -> None:
+    engine = _completed_engine(0)
+    original_actions = engine.snapshot().rescue_actions
+    third_action = original_actions[0].model_copy(
+        update={"id": "action_current_run_third", "outcome": RescueOutcome.NO_RESPONSE}
+    )
+    with engine._lock:
+        engine._rescue_actions.append(third_action)
+
+    response = engine.ops_chat("Give me a recap of this run.")
+
+    assert response.message.content.startswith("I handled 3 rescue interventions this run:")
+    assert response.message.content.count("\n- ") == 3
+    assert "Outcome: no response" in response.message.content
+    assert len(response.message.tool_calls[0].data) == 3
+    engine.reset()
+
+
+def test_run_recap_excludes_monitoring_only_booking_and_preserves_mixed_outcomes() -> None:
+    engine = _completed_engine(0)
+    snapshot = engine.snapshot()
+    monitored_journey = next(
+        journey
+        for journey in snapshot.selected_journeys
+        if not any(
+            action.booking_id == journey.booking_id
+            for action in snapshot.rescue_actions
+        )
+    )
+    monitored_renter = next(
+        renter for renter in RENTERS if renter.id == monitored_journey.renter_id
+    )
+
+    response = engine.ops_chat("What messages went out?")
+
+    assert len(response.message.tool_calls[0].data) == len(snapshot.rescue_actions)
+    assert monitored_renter.name not in response.message.content
+    for outcome in {action.outcome.value for action in snapshot.rescue_actions}:
+        assert f"Outcome: {outcome.replace('_', ' ')}" in response.message.content
+    engine.reset()
+
+
+@pytest.mark.parametrize(
+    "question",
+    (
+        "What did you handle during this run?",
+        "What did you do this run?",
+        "What messages did you send?",
+        "Who did you contact?",
+        "Give me a recap of this run.",
+        "Who did you message?",
+        "What messages went out?",
+        "Give me the rundown.",
+        "What happened with the interventions?",
+    ),
+)
+def test_natural_language_recap_phrasings_use_complete_current_run_actions(
+    question: str,
+) -> None:
+    planner = SequencePlanner(
+        OpsChatPlan(response="Incorrect partial model response.", tool_name="none")
+    )
+    engine = SimulationEngine(
+        duration_seconds=0.15,
+        ops_chat_service=OpsChatService(planner),
+    )
+    engine.start(seed=0)
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        if engine.snapshot().status.value == "completed":
+            break
+        time.sleep(0.005)
+
+    response = engine.ops_chat(question)
+
+    assert response.message.tool_calls[0].tool_name == "get_recent_rescue_actions"
+    assert len(response.message.tool_calls[0].data) == 2
+    assert response.message.content.count("\n- ") == 2
+    assert planner.calls == 0
+    engine.reset()
 
 
 def test_high_value_and_at_risk_tools_return_only_current_run_bookings() -> None:

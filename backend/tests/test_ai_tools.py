@@ -4,7 +4,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models import AIActionType
+from app.models import (
+    AIActionType,
+    InterventionType,
+    MessageSource,
+    RescueAction,
+    RescueActionStatus,
+    RescueOutcome,
+    RescueTarget,
+)
 from app.services.ai_tools import (
     AIToolDeniedError,
     AIToolValidationError,
@@ -156,6 +164,45 @@ def test_write_tools_use_backend_validation_and_audit_results() -> None:
     assert AIActionType.ACTION_DENIED in action_types
     assert AIActionType.ESCALATED_TO_OPERATOR in action_types
     assert AIActionType.AUTOPILOT_CHANGED in action_types
+    engine.reset()
+
+
+def test_normal_value_ai_messages_are_capped_at_two_without_operator_action() -> None:
+    engine = SimulationEngine(duration_seconds=90)
+    engine.set_autopilot(False)
+    started = engine.start(seed=1)
+    booking = next(item for item in started.bookings if item.booking_value < 4_000)
+    existing_actions = [
+        RescueAction(
+            id=f"action_existing_{index}",
+            run_id=started.run_id,
+            booking_id=booking.id,
+            score_at_trigger=80,
+            intervention_type=InterventionType.RENTER_FOLLOW_UP,
+            target_type=RescueTarget.RENTER,
+            target_id=booking.renter_id,
+            reason_summary="Previously approved autonomous follow-up.",
+            message_text="Can you share an update?",
+            message_source=MessageSource.OPENAI,
+            status=RescueActionStatus.SENT,
+            outcome=RescueOutcome.STILL_AT_RISK,
+        )
+        for index in range(2)
+    ]
+    with engine._lock:
+        engine._rescue_actions.extend(existing_actions)
+
+    with pytest.raises(AIToolDeniedError, match="message limit"):
+        engine.dispatch_ai_tool(
+            "send_rescue_sms",
+            {
+                "booking_id": booking.id,
+                "intervention_type": InterventionType.RENTER_FOLLOW_UP.value,
+                "message": "Can you share another update?",
+            },
+        )
+
+    assert len(engine.snapshot().rescue_actions) == 2
     engine.reset()
 
 

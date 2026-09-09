@@ -184,11 +184,35 @@ class OpsChatService:
         entities: tuple[OpsEntity, ...] = (),
     ) -> OpsChatTurn:
         normalized = " ".join(message.split())
+        recap_requested = _is_run_recap_question(normalized)
         resolution = resolve_entity_reference(normalized, entities)
-        if resolution.status == "none" and not _is_operations_question(normalized):
-            return OpsChatTurn(content=OUT_OF_DOMAIN_RESPONSE)
         if resolution.status == "ambiguous":
             return OpsChatTurn(content=_render_ambiguity(resolution))
+        if resolution.entity is not None:
+            return _respond_for_entity(normalized, resolution.entity, dispatch)
+        if recap_requested:
+            try:
+                dispatched = dispatch("get_recent_rescue_actions", {})
+                result = OpsChatToolResult(
+                    tool_name=dispatched.tool_name,
+                    result=dispatched.result,
+                    data=dispatched.data,
+                )
+            except AIToolError as error:
+                result = OpsChatToolResult(
+                    tool_name="get_recent_rescue_actions",
+                    result="denied",
+                    data={"message": str(error)},
+                )
+            return OpsChatTurn(
+                content=_render_run_recap(result),
+                tool_results=(result,),
+            )
+        if (
+            resolution.status == "none"
+            and not _is_operations_question(normalized)
+        ):
+            return OpsChatTurn(content=OUT_OF_DOMAIN_RESPONSE)
         if resolution.status == "not_found":
             if entities:
                 return OpsChatTurn(
@@ -197,8 +221,6 @@ class OpsChatService:
             return OpsChatTurn(
                 content="There is no current simulation run data to search."
             )
-        if resolution.entity is not None:
-            return _respond_for_entity(normalized, resolution.entity, dispatch)
 
         results: list[OpsChatToolResult] = []
         plan = self._plan(normalized, ())
@@ -515,6 +537,24 @@ def _is_operations_question(message: str) -> bool:
     )
 
 
+def _is_run_recap_question(message: str) -> bool:
+    lowered = message.casefold()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "what did you handle",
+            "what did you do",
+            "what messages did you send",
+            "who did you contact",
+            "recap of this run",
+            "who did you message",
+            "messages went out",
+            "give me the rundown",
+            "happened with the interventions",
+        )
+    )
+
+
 def _fallback_plan(message: str) -> OpsChatPlan:
     lowered = message.casefold()
     if "pause" in lowered and "autopilot" in lowered:
@@ -549,6 +589,41 @@ def _fallback_plan(message: str) -> OpsChatPlan:
         response="I’ll check the current backend state.",
         tool_name=tool_name,
     )
+
+
+def _render_run_recap(result: OpsChatToolResult) -> str:
+    if result.result != "success" or not isinstance(result.data, list):
+        detail = result.data.get("message") if isinstance(result.data, dict) else None
+        return (
+            "I could not retrieve the current-run intervention recap: "
+            f"{detail or 'backend lookup failed'}."
+        )
+
+    actions = [action for action in result.data if isinstance(action, dict)]
+    if not actions:
+        return "No rescue interventions were sent during this run."
+
+    noun = "intervention" if len(actions) == 1 else "interventions"
+    lines = [f"I handled {len(actions)} rescue {noun} this run:"]
+    for action in actions:
+        renter = str(action.get("renter_name") or "Unknown renter")
+        listing = str(action.get("listing_name") or action.get("booking_id") or "booking")
+        recipient = str(action.get("target_name") or action.get("target_id") or "recipient")
+        intervention = str(
+            action.get("intervention_type") or "rescue intervention"
+        ).replace("_", " ").lower()
+        reason = str(
+            action.get("reason_summary") or "backend rescue policy approved outreach"
+        ).strip().rstrip(".")
+        outcome = str(action.get("outcome") or "pending").replace("_", " ").lower()
+        booking_status = str(
+            action.get("booking_status") or "unknown"
+        ).replace("_", " ").lower()
+        lines.append(
+            f"- {renter} → {listing}: contacted {recipient} with {intervention} "
+            f"because {reason}. Outcome: {outcome}; current status: {booking_status}."
+        )
+    return "\n".join(lines)
 
 
 def _render_results(results: list[OpsChatToolResult], message: str = "") -> str:
@@ -609,26 +684,7 @@ def _render_results(results: list[OpsChatToolResult], message: str = "") -> str:
                     f"I reviewed {len(listers)} listers. {top.get('name', 'The top lister')} "
                     f"has the most rescue activity with {top.get('rescue_actions', 0)} actions."
                 )
-        if result.tool_name == "get_recent_rescue_actions" and data:
-            actions = [item for item in data if isinstance(item, dict)]
-            named_action = next(
-                (
-                    action
-                    for action in actions
-                    if str(action.get("target_name", "")).casefold() in message.casefold()
-                ),
-                None,
-            )
-            action = named_action or (actions[0] if actions else None)
-            if action:
-                intervention = str(
-                    action.get("intervention_type", "a rescue intervention")
-                ).replace("_", " ").lower()
-                return (
-                    f"I found {len(actions)} {label}. "
-                    f"{action.get('target_name', 'The recipient')} was contacted with "
-                    f"{intervention} "
-                    f"because {action.get('reason_summary', 'backend rescue policy allowed it')}"
-                )
+        if result.tool_name == "get_recent_rescue_actions":
+            return _render_run_recap(result)
         return f"I found {len(data)} {label}."
     return "The approved backend check completed successfully."

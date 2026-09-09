@@ -5,7 +5,10 @@ and recovering at-risk bookings. A randomized 90-second run streams renter and
 lister activity, calculates transparent rescue scores, applies deterministic
 guardrails, generates intervention-specific SMS copy, and simulates replies and
 booking outcomes. Successful interventions update rescued GMV and every action
-remains inspectable in an audit ledger.
+remains inspectable in an audit ledger. The V2 Ops Brief adds a guardrailed
+operations copilot, current-run marketplace summaries, a high-value human-review
+queue, and an allowlisted operations chat without giving the model authority over
+scores or booking outcomes.
 
 This repository uses simulated marketplace profiles and demo SMS state only. It
 does not contain or claim access to real Snag data, and it never sends a real
@@ -38,7 +41,7 @@ messages. To enable model-generated rescue wording, create a private
 `OPENAI_TIMEOUT_SECONDS` are optional. The backend
 loads that file automatically at startup; it never loads `.env.example`.
 Existing environment variables take precedence, preserving Render deployment
-behavior. Both settings stay on the backend, and the environment file is
+behavior. All provider settings stay on the backend, and the environment file is
 ignored by Git. The current provider implementation is OpenAI, isolated behind
 a provider-neutral LLM interface. The default model is `gpt-4o-mini`.
 
@@ -115,8 +118,12 @@ follow-up.
 3. Watch three booking journeys evolve for approximately 90 seconds.
 4. Inspect a booking row as its score and risk reasons change.
 5. Follow the simulated rescue SMS, recipient reply, and mixed outcomes.
-6. Confirm that a completed rescue increments monthly GMV.
-7. Open **Activity log** and select an intervention to inspect its evidence.
+6. Open **Ops Brief** to review priority alerts, the AI Agent Log, and High-Value Watch.
+7. For a high-value case, confirm the first SMS sent automatically and the next
+   response requires **Approve AI** or **Human Rescue**.
+8. Ask “What needs my attention?” and try pausing/resuming Autopilot in Ask Rescue Agent.
+9. Confirm that a completed rescue increments monthly GMV.
+10. Open **Activity log** and inspect both Rescue Actions and the AI Agent Log.
 
 Use **Reset** at any point to cancel the current run and restore a clean demo.
 After completion, **Run simulation again** starts a newly randomized run.
@@ -132,13 +139,18 @@ FastAPI simulation engine
   ├─ deterministic rescue scoring and guardrails
   ├─ provider-neutral AI message generation with safe fallback
   ├─ allowlisted AI tools with server-side write revalidation
+  ├─ current-run scoped Ops Brief and operations chat
+  ├─ high-value follow-up approval and human-ownership gate
   ├─ simulated SMS delivery and profile-driven response outcomes
   └─ shared audit and duplicate-safe GMV analytics
 ```
 
-FastAPI owns all scoring, intervention, outcome, and analytics logic. The
-Next.js client is an operator view over that canonical state, so the dashboard
-and activity ledger cannot calculate conflicting results.
+FastAPI owns all scoring, intervention, outcome, approval, and analytics logic.
+The model can request only the 13 registered tools; every write is validated by
+the backend. The Next.js client is an operator view over that canonical state,
+so the dashboard, Ops Brief, and activity ledger cannot calculate conflicting
+results. Resetting or starting a run changes the active `run_id`; Ops chat and
+its tool results are restricted to that run.
 
 ## Production environment
 
@@ -148,11 +160,56 @@ Set these deployment variables without committing their values to the repository
 - Render backend: `OPENAI_API_KEY` for model-generated wording
 - Render backend: optional `OPENAI_MODEL` override (defaults to `gpt-4o-mini`)
 - Render backend: optional `OPENAI_TIMEOUT_SECONDS` override (defaults to `20`)
+- Render backend: optional `OPENAI_BASE_URL` override for a compatible endpoint
 - Vercel frontend: `NEXT_PUBLIC_API_URL` set to the deployed Render API origin
 
 The backend always permits `http://localhost:3000` for local development and
 adds `FRONTEND_ORIGIN` to its CORS allowlist when configured. The frontend falls
 back to `http://localhost:8000` when `NEXT_PUBLIC_API_URL` is absent.
+
+Current production origins:
+
+```text
+Frontend: https://rescue-snag-bookings.vercel.app
+Backend:  https://rescue-agent-i8np.onrender.com
+```
+
+Use `backend/` as the Render root and start the service with:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+Use `frontend/` as the Vercel root. Environment changes in Vercel require a new
+deployment because `NEXT_PUBLIC_API_URL` is embedded during the frontend build.
+
+## Deterministic V2 QA path
+
+Normal UI runs remain randomized. For a repeatable high-value review flow,
+reset the backend and start QA seed `0` through the API:
+
+```bash
+curl -s -X POST http://localhost:8000/simulation/reset
+curl -s -X POST http://localhost:8000/simulation/start \
+  -H 'Content-Type: application/json' \
+  -d '{"seed":0}'
+```
+
+This seed is a QA fixture, not hardcoded production behavior. It exercises an
+autonomous first message for a booking at or above $4,000, followed by the
+server-enforced human-review flow. Open `/ops` during the run to inspect the
+attention case, choose **Approve AI** or **Human Rescue**, and query the active
+run through Ask Rescue Agent.
+
+Production connectivity checks:
+
+```bash
+curl -s https://rescue-agent-i8np.onrender.com/health
+curl -I https://rescue-snag-bookings.vercel.app
+curl -i -X OPTIONS https://rescue-agent-i8np.onrender.com/dashboard \
+  -H 'Origin: https://rescue-snag-bookings.vercel.app' \
+  -H 'Access-Control-Request-Method: GET'
+```
 
 ## Run checks
 

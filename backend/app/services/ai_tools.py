@@ -12,6 +12,7 @@ from app.models import (
     AIActionType,
     AIAgentLog,
     InterventionType,
+    RescueActionStatus,
 )
 from app.services.attention import is_high_value
 
@@ -261,8 +262,9 @@ class AIToolDispatcher:
             action
             for action in snapshot.rescue_actions
             if action.run_id == snapshot.run_id
+            and action.status is RescueActionStatus.SENT
         ]
-        for action in reversed(current_actions[-20:]):
+        for action in current_actions:
             payload = action.model_dump(mode="json")
             participants = RENTERS if action.target_type.value == "renter" else LISTERS
             participant = next(
@@ -270,6 +272,15 @@ class AIToolDispatcher:
                 None,
             )
             payload["target_name"] = participant.name if participant else action.target_id
+            booking = _booking_payload(snapshot, action.booking_id)
+            payload.update(
+                {
+                    "renter_name": booking["renter_name"],
+                    "lister_name": booking["lister_name"],
+                    "listing_name": booking["listing_name"],
+                    "booking_status": booking["booking"]["status"],
+                }
+            )
             actions.append(payload)
         return actions
 

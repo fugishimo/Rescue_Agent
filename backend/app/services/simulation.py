@@ -128,6 +128,7 @@ class AttentionActionDeniedError(RuntimeError):
 
 
 _UNSCOPED_TOOL_CALL = object()
+MAX_AI_OUTBOUND_MESSAGES_PER_BOOKING = 2
 
 
 @dataclass(frozen=True)
@@ -650,6 +651,15 @@ class SimulationEngine:
             if is_high_value(booking) and prior_sent_actions:
                 raise AIToolDeniedError(
                     "High-value follow-up requires explicit Approve AI review."
+                )
+            ai_authored_sent_actions = [
+                action
+                for action in prior_sent_actions
+                if action.message_source is MessageSource.OPENAI
+            ]
+            if len(ai_authored_sent_actions) >= MAX_AI_OUTBOUND_MESSAGES_PER_BOOKING:
+                raise AIToolDeniedError(
+                    "The autonomous AI message limit has been reached for this booking."
                 )
             active_attention = self._active_attention_case_for(booking_id)
             if active_attention is not None:
